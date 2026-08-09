@@ -18,9 +18,25 @@
 .idea/**/aws.xml
 data/*
 !data/corpus/
-input/
-models/
-output/
+
+### Project layout
+# Run outputs (logs, metrics, configs, predictions) are tracked; the weight and
+# export directories are not. See outputs/.gitignore for the exact rules.
+!outputs/
+# Helper scripts are tracked; negates the broad "[Ss]cripts" venv pattern below.
+!/scripts/
+!/scripts/**
+
+# Model weights and exported models are never committed, wherever they live.
+*.pt
+*.pth
+*.pte
+*.ckpt
+*.safetensors
+*.onnx
+*.tflite
+
+
 
 # Generated files
 .idea/**/contentModel.xml
@@ -117,7 +133,11 @@ fabric.properties
 [Ll]ib
 [Ll]ib64
 [Ll]ocal
-[Ss]cripts
+# "[Ss]cripts" (the Windows venv bin directory) is scoped to virtualenv roots so
+# it does not swallow this project's tracked /scripts folder.
+[Ss]cripts/[Aa]ctivate*
+.venv/[Ss]cripts
+venv/[Ss]cripts
 pyvenv.cfg
 .venv
 pip-selfcheck.json
@@ -617,7 +637,8 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-[Ll]ogs/
+# [Ll]ogs/
+
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
