@@ -68,7 +68,7 @@ class Evaluator:
                 spectrograms = spectrograms.to(self.device)
                 labels = labels.to(self.device)
 
-                output = self.model(spectrograms)
+                output = self.model(spectrograms, input_lengths)
                 output = F.log_softmax(output, dim=2)
                 output = output.transpose(0, 1)  # Required for CTCLoss: (time, batch, class)
 

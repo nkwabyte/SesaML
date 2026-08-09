@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -75,6 +77,10 @@ class SpeechRecognitionModel(nn.Module):
     Extracts audio features via Conv2D & Residual CNN blocks, followed by Bidirectional GRU layers.
     """
 
+    # Time reduction applied by the initial strided conv. The collate function
+    # uses this to compute CTC input_lengths. Overridden per architecture.
+    subsampling_factor = 2
+
     def __init__(
         self,
         n_cnn_layers: int = 3,
@@ -114,8 +120,10 @@ class SpeechRecognitionModel(nn.Module):
             nn.Linear(rnn_dim, n_class)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         # Input shape: (batch, channel=1, feature=n_mels, time)
+        # `lengths` is accepted so every architecture shares one call signature;
+        # recurrent layers handle padding without an explicit mask, so it is unused.
         x = self.cnn(x)
         x = self.rescnn_layers(x)
 

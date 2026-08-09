@@ -13,6 +13,8 @@ class AudioConfig:
 
 @dataclass
 class ModelConfig:
+    # Which architecture to build; see src/models/__init__.py ARCHITECTURES.
+    architecture: str = "deepspeech"
     n_cnn_layers: int = 3
     n_rnn_layers: int = 5
     rnn_dim: int = 512
@@ -51,13 +53,20 @@ class PathConfig:
     exports_dir: str = "outputs/exports"
     models_dir: str = "outputs/checkpoints"
 
+def get_default_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
 @dataclass
 class PipelineConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     paths: PathConfig = field(default_factory=PathConfig)
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = field(default_factory=get_default_device)
 
     def to_dict(self) -> dict:
         """Serializable snapshot of the whole configuration, stored with every run."""

@@ -65,6 +65,30 @@ class TestSesaML(unittest.TestCase):
         self.assertEqual(output.shape[0], batch_size)
         self.assertEqual(output.shape[2], n_class)
 
+    def test_conformer_model(self):
+        from src.models.conformer import ConformerCTC
+        batch_size = 2
+        n_mels = 128
+        time_steps = 100
+        n_class = 35
+
+        model = ConformerCTC(
+            n_class=n_class,
+            n_feats=n_mels,
+            encoder_dim=64,
+            num_layers=2,
+            num_heads=2,
+            ffn_dim=128,
+        )
+
+        dummy_input = torch.randn(batch_size, 1, n_mels, time_steps)
+        lengths = torch.tensor([50, 25], dtype=torch.long)
+        output = model(dummy_input, lengths=lengths)
+
+        self.assertEqual(output.shape[0], batch_size)
+        self.assertEqual(output.shape[1], time_steps // 4)
+        self.assertEqual(output.shape[2], n_class)
+
     def test_greedy_decoder(self):
         probs = torch.randn(5, 2, 35)  # (time, batch, class)
         decoded = greedy_decoder(probs, blank_label=34)

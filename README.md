@@ -32,9 +32,16 @@ Each folder has its own `info.md` with the details.
 
 ## Getting started
 
+Requires **Python ≥ 3.10, < 3.14** (Python **3.11** or **3.12** recommended; Python 3.14+ is unsupported by audio C-extension dependencies):
+
 ```bash
 git clone https://github.com/nkwabyte/SesaML.git && cd SesaML
+
+# Standard setup:
 scripts/setup_env.sh
+
+# Or specify a Python version manager binary (pyenv, brew, asdf, etc.):
+PYTHON=python3.11 scripts/setup_env.sh
 ```
 
 That creates `.venv`, installs `requirements.txt`, seeds `.env` from
@@ -161,13 +168,24 @@ Upload or record a clip, pick `deepspeech` (your newest checkpoint) or `whisper`
 cached. `app/app.py` exposes `demo` at module level, so it doubles as a
 HuggingFace Space entrypoint. See [app/info.md](app/info.md).
 
-## The model
+## The models
 
-DeepSpeech2-inspired CTC architecture in
-[src/models/deepspeech.py](src/models/deepspeech.py): a Conv2d stem, residual CNN
-blocks with layer norm and GELU, a linear projection, then stacked bidirectional
-GRUs and a classifier. Inputs are 128-bin mel spectrograms at 16 kHz with
-SpecAugment-style frequency and time masking during training.
+Multiple CTC architectures share a uniform interface (`src/models/`):
+
+- `deepspeech` (default) — DeepSpeech2-style residual CNN + bidirectional GRU ([src/models/deepspeech.py](src/models/deepspeech.py)), 2× time subsampling.
+- `conformer` — Conformer-S encoder with attention, depthwise convolution and macaron feed-forwards ([src/models/conformer.py](src/models/conformer.py)), ~10M parameters, 4× time subsampling.
+- `conformer-medium` — Conformer-M encoder, ~30M parameters, 4× time subsampling.
+
+Pass `--architecture` to train, evaluate, or transcribe:
+
+```bash
+scripts/train.sh --architecture conformer
+ARCHITECTURE=conformer-medium scripts/train.sh
+```
+
+Every checkpoint stores its `model_meta.json` in `outputs/checkpoints/<run_id>/`, so evaluation, export, and the web app auto-detect the architecture automatically.
+
+Inputs are 128-bin mel spectrograms at 16 kHz with SpecAugment-style frequency and time masking during training.
 
 The character vocabulary is 41 symbols — `a-z`, `0-9`, apostrophe, the Akan
 characters `ɛ` and `ɔ`, space, and the CTC blank. Punctuation is dropped during
@@ -205,6 +223,6 @@ shapes, audio transforms, greedy decoding and WER/CER.
 
 ## Requirements
 
-Python ≥ 3.10, PyTorch 2.9, torchaudio. `requirements.txt` is fully pinned.
-GPU is optional — the device is selected automatically and everything runs on
-CPU, just slower.
+- **Python**: `≥ 3.10, < 3.14` (**3.11** or **3.12** recommended; 3.14+ is unsupported by `numba`/`llvmlite` dependencies).
+- **PyTorch**: PyTorch 2.9, torchaudio (`requirements.txt` is fully pinned).
+- **Compute**: Apple Silicon (`mps`), NVIDIA CUDA (`cuda`), or CPU (`cpu`). The device is selected automatically based on availability.

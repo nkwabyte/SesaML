@@ -7,11 +7,11 @@ import torchaudio
 from ..config import PipelineConfig
 from ..data.text_transform import TextTransform
 from ..data.audio_transforms import get_valid_audio_transforms
-from ..models.deepspeech import SpeechRecognitionModel
+from ..models import build_architecture, SpeechRecognitionModel
 from ..models.whisper_model import WhisperASR
 from ..training.evaluator import greedy_decoder
 from ..utils.noise_reduction import reduce_audio_noise
-from ..utils.run_logger import resolve_checkpoint
+from ..utils.run_logger import load_model_meta, resolve_checkpoint
 
 DEFAULT_WHISPER_REPO = "CiBeDL/twi_trained_whisper"
 
@@ -19,22 +19,17 @@ def load_deepspeech_model(
     model_path: str,
     config: Optional[PipelineConfig] = None,
     text_transform: Optional[TextTransform] = None
-) -> SpeechRecognitionModel:
-    """Loads state dict into SpeechRecognitionModel architecture."""
+) -> torch.nn.Module:
+    """Loads state dict into configured or auto-detected CTC architecture."""
     config = config or PipelineConfig()
     text_transform = text_transform or TextTransform()
     device = torch.device(config.device)
 
+    meta = load_model_meta(model_path)
+    arch_name = (meta and meta.get("architecture")) or config.model.architecture
+
     n_class = text_transform.vocab_size
-    model = SpeechRecognitionModel(
-        n_cnn_layers=config.model.n_cnn_layers,
-        n_rnn_layers=config.model.n_rnn_layers,
-        rnn_dim=config.model.rnn_dim,
-        n_class=n_class,
-        n_feats=config.model.n_feats,
-        stride=config.model.stride,
-        dropout=config.model.dropout
-    ).to(device)
+    model = build_architecture(arch_name, n_class, config).to(device)
 
     if os.path.exists(model_path):
         state_dict = torch.load(model_path, map_location=device)

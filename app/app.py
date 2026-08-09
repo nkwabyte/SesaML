@@ -24,7 +24,7 @@ import gradio as gr
 
 from src.config import PipelineConfig
 from src.inference.transcribe import DEFAULT_WHISPER_REPO, Transcriber
-from src.utils.run_logger import RunManager, latest_checkpoint
+from src.utils.run_logger import RunManager, latest_checkpoint, load_model_meta
 
 MODEL_CHOICES = ("deepspeech", "whisper")
 
@@ -33,7 +33,7 @@ DESCRIPTION = """
 
 Upload an audio clip or record from your microphone to transcribe Akan (Twi) speech.
 
-- **deepspeech** — the DeepSpeech2 CTC model trained in this repo, loaded from the newest checkpoint in `outputs/checkpoints/`.
+- **deepspeech / conformer** — custom PyTorch CTC model trained in this repo, loaded from the newest checkpoint in `outputs/checkpoints/`.
 - **whisper** — a fine-tuned Whisper model pulled from the HuggingFace Hub.
 """
 
@@ -68,10 +68,12 @@ def model_status(model_type: str) -> str:
     checkpoint = latest_checkpoint(config.paths.output_dir)
     if checkpoint is None:
         return (
-            "⚠️ **No trained checkpoint found.** DeepSpeech will run with random weights "
+            "⚠️ **No trained checkpoint found.** CTC model will run with random weights "
             "and produce gibberish. Train one first with `scripts/train.sh`, or switch to Whisper."
         )
-    return f"**DeepSpeech** — `{checkpoint}`"
+    meta = load_model_meta(checkpoint)
+    arch = (meta and meta.get("architecture")) or "deepspeech"
+    return f"**{arch}** — `{checkpoint}`"
 
 
 def transcribe(audio_path: Optional[str], model_type: str, noise_reduction: bool) -> Tuple[str, str]:

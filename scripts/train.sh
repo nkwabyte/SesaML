@@ -15,12 +15,13 @@
 # deliberately left out: they are copies of the same 2,446 clips, and the
 # pipeline already applies SpecAugment on the fly.
 #
-# Environment overrides: HF_DATASETS, VAL_DATASET, EPOCHS, BATCH_SIZE, LEARNING_RATE.
+# Environment overrides: ARCHITECTURE, HF_DATASETS, VAL_DATASET, EPOCHS, BATCH_SIZE, LEARNING_RATE.
 # Any extra flags are forwarded to `python -m src.main train`.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 bootstrap
 
+ARCHITECTURE="${ARCHITECTURE:-deepspeech}"
 # Space-separated list of repo[:split] specs.
 HF_DATASETS="${HF_DATASETS:-ghanaopendata/twi-speech-text-multispeaker-16k:train Lagyamfi/akan_audio_processed:train}"
 VAL_DATASET="${VAL_DATASET:-Lagyamfi/akan_audio_processed:test}"
@@ -28,7 +29,7 @@ EPOCHS="${EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-10}"
 LEARNING_RATE="${LEARNING_RATE:-5e-4}"
 
-ARGS=(train --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" --lr "${LEARNING_RATE}")
+ARGS=(train --architecture "${ARCHITECTURE}" --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" --lr "${LEARNING_RATE}")
 
 # Only inject the default corpora when the caller did not pick a data source.
 if [[ "$*" != *"--csv-path"* && "$*" != *"--hf-dataset"* ]]; then
