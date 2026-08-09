@@ -1,9 +1,9 @@
 # Outputs
 
 Everything a run produces lands here. Each invocation of `src/main.py` (train,
-evaluate, transcribe, export) or `scripts/download_dataset.py` creates a run
-with an id like `train-20260809-101500` and writes all of its artifacts under
-that id.
+evaluate, transcribe, export), `scripts/download_dataset.py`, or a session of
+the Gradio app creates a run with an id like `train-20260809-101500` and writes
+all of its artifacts under that id.
 
 ```
 outputs/
@@ -20,10 +20,11 @@ outputs/
 │       ├── predictions.json     evaluation reference/hypothesis samples
 │       ├── evaluation.json      loss / WER / CER for an evaluation run
 │       ├── transcript.txt       transcription result
+│       ├── dataset_manifest.json rows, columns, sample transcripts (downloads)
 │       ├── export_manifest.json exported artifact: format, size, SHA-256
 │       └── summary.json         status, duration, headline metrics
-├── checkpoints/<run_id>/        training weights          — NOT in git
-└── exports/<run_id>/            exported .pt/.pth/.pte    — NOT in git
+├── checkpoints/<run_id>/        training weights + model_meta.json — NOT in git
+└── exports/<run_id>/            exported .pt/.pth/.pte            — NOT in git
 ```
 
 ## What is tracked
@@ -37,12 +38,14 @@ and `exports/` are ignored, as are `*.pt`, `*.pth`, `*.pte`, `*.ckpt`, `*.bin`,
 Each `export_manifest.json` records the SHA-256 of its (untracked) binary, so a
 committed run still identifies exactly which artifact it produced.
 
+Run kinds are `train`, `evaluate`, `transcribe`, `export`, `download` and `app`.
+
 ## Browsing runs
 
 ```bash
 python scripts/summarize_runs.py              # table of all runs
 python scripts/summarize_runs.py --kind train --limit 5
-cat outputs/logs/train-20260809-101500.log
+less outputs/logs/train-20260809-101500.log
 ```
 
 `metrics.csv` loads directly into pandas:

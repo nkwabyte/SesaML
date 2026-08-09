@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from ..config import PipelineConfig
 from ..data.text_transform import TextTransform
-from ..utils.run_logger import RunManager
+from ..utils.run_logger import RunManager, save_model_meta
 from .evaluator import Evaluator
 
 class Trainer:
@@ -106,7 +106,9 @@ class Trainer:
 
             self.optimizer.zero_grad()
 
-            output = self.model(spectrograms)
+            # Attention-based encoders need the valid frame counts, or they
+            # attend to padding; recurrent ones ignore the argument.
+            output = self.model(spectrograms, input_lengths)
             output = F.log_softmax(output, dim=2)
             output = output.transpose(0, 1)  # Required for CTCLoss: (time, batch, class)
 
@@ -136,6 +138,11 @@ class Trainer:
 
     def train(self) -> str:
         checkpoint_dir = self.run.ensure_checkpoint_dir()
+        save_model_meta(checkpoint_dir, {
+            "architecture": getattr(self.config.model, "architecture", "deepspeech"),
+            "subsampling_factor": getattr(self.model, "subsampling_factor", 2),
+            "vocab_size": self.text_transform.vocab_size,
+        })
         checkpoint_path = os.path.join(str(checkpoint_dir), self.config.training.model_name)
         best_path = os.path.join(str(checkpoint_dir), "best_model.pt")
         last_path = os.path.join(str(checkpoint_dir), "last_model.pt")

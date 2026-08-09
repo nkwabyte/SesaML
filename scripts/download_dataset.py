@@ -20,10 +20,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import PipelineConfig
+from src.data.hf_dataset import TEXT_COLUMNS
 from src.utils.run_logger import RunManager, resolve_path
 
 DEFAULT_DATASET = "ghanaopendata/twi-speech-text-multispeaker-16k"
-TEXT_COLUMNS = ("text", "sentence", "transcription", "transcript")
+# Lagyamfi/akan_audio_processed ships 10 augmented copies of every split
+# (train_Noise_Aug, test_Pitch_Aug, ...). They hold the same 2,446 clips as the
+# base splits, so they are skipped unless explicitly requested.
+AUGMENTED_SUFFIX = "_Aug"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,23 +39,47 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-dir", default="data/datasets", help="Directory the dataset is saved to on disk")
     parser.add_argument("--no-save-to-disk", action="store_true", help="Only populate the cache, skip save_to_disk()")
     parser.add_argument("--num-samples", type=int, default=None, help="Keep only the first N rows of each split (smoke tests)")
+    parser.add_argument("--include-augmented", action="store_true", help=f"Also download splits ending in '{AUGMENTED_SUFFIX}' (duplicated audio; off by default)")
     parser.add_argument("--token", default=None, help="HuggingFace token (defaults to $HF_TOKEN)")
     parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
     return parser
 
 
-def resolve_splits(dataset: str, config_name, requested, token, logger):
-    """Uses the requested splits, otherwise discovers what the dataset offers."""
+def _looks_like_auth_error(exc: Exception) -> bool:
+    """Recognises the gated/private dataset failures worth a friendlier message."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in ("401", "403", "gated", "authenticat", "not accessible", "unauthorized"))
+
+
+def resolve_splits(dataset: str, config_name, requested, token, logger, include_augmented: bool = False):
+    """
+    Uses the requested splits, otherwise discovers what the dataset offers.
+    Augmented duplicate splits are filtered out unless explicitly requested, so
+    the default download is unique audio only.
+    """
     if requested:
         return requested
+
     try:
         from datasets import get_dataset_split_names
         splits = list(get_dataset_split_names(dataset, config_name=config_name, token=token))
-        logger.info("Discovered splits: %s", ", ".join(splits))
-        return splits
+        logger.info("Discovered %d splits: %s", len(splits), ", ".join(splits))
     except Exception as exc:
         logger.warning("Could not list splits (%s); falling back to 'train'", exc)
         return ["train"]
+
+    if include_augmented:
+        return splits
+
+    base = [s for s in splits if not s.endswith(AUGMENTED_SUFFIX)]
+    skipped = len(splits) - len(base)
+    if skipped:
+        logger.warning(
+            "Skipping %d augmented split(s) ending in '%s' - they duplicate the base audio. "
+            "Pass --include-augmented to download them.",
+            skipped, AUGMENTED_SUFFIX
+        )
+    return base or splits
 
 
 def preview_transcripts(split_dataset, limit: int = 3):
@@ -84,7 +112,9 @@ def main() -> int:
         run.logger.info("Cache directory: %s", cache_dir)
         run.logger.info("Authenticated: %s", bool(token))
 
-        splits = resolve_splits(args.dataset, args.config_name, args.split, token, run.logger)
+        splits = resolve_splits(
+            args.dataset, args.config_name, args.split, token, run.logger, args.include_augmented
+        )
         manifest = {
             "dataset": args.dataset,
             "config_name": args.config_name,
@@ -96,13 +126,22 @@ def main() -> int:
 
         for split in splits:
             run.logger.info("Loading split '%s'", split)
-            split_dataset = load_dataset(
-                args.dataset,
-                name=args.config_name,
-                split=split,
-                cache_dir=str(cache_dir),
-                token=token,
-            )
+            try:
+                split_dataset = load_dataset(
+                    args.dataset,
+                    name=args.config_name,
+                    split=split,
+                    cache_dir=str(cache_dir),
+                    token=token,
+                )
+            except Exception as exc:
+                if not token and _looks_like_auth_error(exc):
+                    raise RuntimeError(
+                        f"'{args.dataset}' requires authentication. Accept its terms at "
+                        f"https://huggingface.co/datasets/{args.dataset} while logged in, then set "
+                        f"HF_TOKEN in .env (or run `huggingface-cli login`)."
+                    ) from exc
+                raise
 
             if args.num_samples:
                 keep = min(args.num_samples, len(split_dataset))

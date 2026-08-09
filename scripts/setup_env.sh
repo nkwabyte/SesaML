@@ -14,7 +14,7 @@ for arg in "$@"; do
   esac
 done
 
-PYTHON="${PYTHON:-python3}"
+PYTHON="$(detect_python)"
 
 if [[ "${RECREATE}" -eq 1 && -d "${VENV_DIR}" ]]; then
   log "Removing existing virtualenv at ${VENV_DIR}"

@@ -355,6 +355,37 @@ def resolve_checkpoint(explicit: Optional[str], config: Any) -> str:
     return str(resolve_path(getattr(paths, "models_dir", "outputs/checkpoints")) / config.training.model_name)
 
 
+MODEL_META_FILENAME = "model_meta.json"
+
+
+def save_model_meta(checkpoint_dir: Path, meta: Dict[str, Any]) -> Path:
+    """
+    Records which architecture produced the weights in a directory.
+
+    Without this, loading a Conformer checkpoint into the default DeepSpeech2
+    architecture fails with an opaque shape mismatch - or worse, silently
+    succeeds if the shapes happen to line up.
+    """
+    path = Path(checkpoint_dir) / MODEL_META_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(meta, handle, indent=2, default=_json_default)
+    return path
+
+
+def load_model_meta(checkpoint_path: Any) -> Optional[Dict[str, Any]]:
+    """Reads the architecture metadata sitting beside a checkpoint, if any."""
+    if not checkpoint_path:
+        return None
+    meta_path = Path(checkpoint_path).parent / MODEL_META_FILENAME
+    if not meta_path.is_file():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def load_run_index(output_dir: str = "outputs") -> List[Dict[str, Any]]:
     """Reads every recorded run summary from ``outputs/runs/index.jsonl``."""
     index_path = resolve_path(output_dir) / "runs" / "index.jsonl"

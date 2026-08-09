@@ -27,6 +27,29 @@ load_env() {
   fi
 }
 
+# Finds a compatible Python interpreter (>=3.10, <3.14).
+detect_python() {
+  if [[ -n "${PYTHON:-}" ]]; then
+    echo "${PYTHON}"
+    return
+  fi
+
+  is_compatible() {
+    local bin="$1"
+    command -v "${bin}" >/dev/null 2>&1 || return 1
+    "${bin}" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)' >/dev/null 2>&1
+  }
+
+  for candidate in python3 python3.11 python3.12 python3.13 python3.10 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.12; do
+    if is_compatible "${candidate}"; then
+      echo "${candidate}"
+      return
+    fi
+  done
+
+  echo "python3"
+}
+
 # Activates .venv when present so scripts work with or without an active shell venv.
 activate_venv() {
   if [[ -n "${VIRTUAL_ENV:-}" ]]; then
@@ -43,7 +66,7 @@ activate_venv() {
     warn "No virtualenv found at ${VENV_DIR} - using system Python (run scripts/setup_env.sh to create one)"
   fi
 
-  PYTHON="${PYTHON:-python3}"
+  PYTHON="$(detect_python)"
   command -v "${PYTHON}" >/dev/null 2>&1 || die "Python interpreter '${PYTHON}' not found"
   export PYTHON
   export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
