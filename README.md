@@ -67,9 +67,12 @@ The transcription column is auto-detected, so corpora that name it `text`,
 `sentence`, `transcription` or `transcript` all load without configuration.
 
 ```bash
-scripts/download_dataset.sh                                          # public corpus
-scripts/download_dataset.sh --dataset Lagyamfi/akan_audio_processed  # needs HF_TOKEN
-scripts/download_dataset.sh --num-samples 100                        # small slice first
+# 1. Download all full Akan corpora (ghanaopendata, Lagyamfi, ghananlpcommunity 500h)
+scripts/download_all_datasets.sh
+# 2. Download a small smoke-test slice (e.g. 100 samples each across all 3 corpora)
+scripts/download_all_datasets.sh --num-samples 100
+# 3. Download with an explicit HuggingFace token for gated access
+scripts/download_all_datasets.sh --token hf_...
 ```
 
 Audio lands in `data/` and is never committed. The manifest describing each
@@ -225,4 +228,5 @@ shapes, audio transforms, greedy decoding and WER/CER.
 
 - **Python**: `≥ 3.10, < 3.14` (**3.11** or **3.12** recommended; 3.14+ is unsupported by `numba`/`llvmlite` dependencies).
 - **PyTorch**: PyTorch 2.9, torchaudio (`requirements.txt` is fully pinned).
+- **System Libraries**: `portaudio` (`brew install portaudio` on macOS, required for live microphone recording via `PyAudio`).
 - **Compute**: Apple Silicon (`mps`), NVIDIA CUDA (`cuda`), or CPU (`cpu`). The device is selected automatically based on availability.

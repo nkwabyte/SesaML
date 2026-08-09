@@ -27,27 +27,18 @@ load_env() {
   fi
 }
 
-# Finds a compatible Python interpreter (>=3.10, <3.14).
+# Finds or installs a compatible Python interpreter (>=3.10, <3.14).
 detect_python() {
   if [[ -n "${PYTHON:-}" ]]; then
     echo "${PYTHON}"
     return
   fi
 
-  is_compatible() {
-    local bin="$1"
-    command -v "${bin}" >/dev/null 2>&1 || return 1
-    "${bin}" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)' >/dev/null 2>&1
-  }
-
-  for candidate in python3 python3.11 python3.12 python3.13 python3.10 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.12; do
-    if is_compatible "${candidate}"; then
-      echo "${candidate}"
-      return
-    fi
-  done
-
-  echo "python3"
+  if [[ -f "${SCRIPT_DIR}/ensure_python.sh" ]]; then
+    "${SCRIPT_DIR}/ensure_python.sh"
+  else
+    echo "python3"
+  fi
 }
 
 # Activates .venv when present so scripts work with or without an active shell venv.
