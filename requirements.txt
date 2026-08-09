@@ -90,3 +90,5 @@ datasets==4.4.1
 jiwer==4.0.0
 # Test runner used by scripts/run_tests.sh
 pytest==8.4.2
+# Web UI for app/app.py
+gradio==5.50.0

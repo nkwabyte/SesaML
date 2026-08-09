@@ -68,6 +68,24 @@ class AkanAudioDataset(Dataset):
         return waveform, self.sample_rate, text, full_path
 
 
+class AudioCollator:
+    """
+    Picklable collate function binding the text and audio transforms.
+
+    DataLoader workers start with `spawn` on macOS and Windows, which cannot
+    pickle a collate function defined as a local closure - it fails the moment
+    num_workers > 0. A module-level callable survives the pickling.
+    """
+
+    def __init__(self, text_transform: TextTransform, audio_transforms: nn.Module, stride: int = 2):
+        self.text_transform = text_transform
+        self.audio_transforms = audio_transforms
+        self.stride = stride
+
+    def __call__(self, batch: List[Tuple[torch.Tensor, int, str, str]]):
+        return data_processing(batch, self.text_transform, self.audio_transforms, stride=self.stride)
+
+
 def data_processing(
     batch: List[Tuple[torch.Tensor, int, str, str]],
     text_transform: TextTransform,

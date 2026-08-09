@@ -5,27 +5,40 @@
 # weights to outputs/checkpoints/<run_id>/ (git-ignored).
 #
 # Usage:
-#   scripts/train.sh                                    # HF dataset, default hyperparameters
+#   scripts/train.sh                                    # both Akan corpora combined
 #   scripts/train.sh --epochs 30 --batch-size 16
 #   scripts/train.sh --csv-path data/corpus/verified_data.csv
-#   scripts/train.sh --val-split test                   # enables per-epoch WER/CER
+#   scripts/train.sh --hf-dataset ghanaopendata/twi-speech-text-multispeaker-16k
 #
-# Environment overrides: HF_DATASET, EPOCHS, BATCH_SIZE, LEARNING_RATE.
+# By default this trains on the base (non-augmented) splits of both corpora and
+# validates on Lagyamfi's held-out test split. The augmented *_Aug splits are
+# deliberately left out: they are copies of the same 2,446 clips, and the
+# pipeline already applies SpecAugment on the fly.
+#
+# Environment overrides: HF_DATASETS, VAL_DATASET, EPOCHS, BATCH_SIZE, LEARNING_RATE.
 # Any extra flags are forwarded to `python -m src.main train`.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 bootstrap
 
-HF_DATASET="${HF_DATASET:-ghanaopendata/twi-speech-text-multispeaker-16k}"
+# Space-separated list of repo[:split] specs.
+HF_DATASETS="${HF_DATASETS:-ghanaopendata/twi-speech-text-multispeaker-16k:train Lagyamfi/akan_audio_processed:train}"
+VAL_DATASET="${VAL_DATASET:-Lagyamfi/akan_audio_processed:test}"
 EPOCHS="${EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-10}"
 LEARNING_RATE="${LEARNING_RATE:-5e-4}"
 
 ARGS=(train --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" --lr "${LEARNING_RATE}")
 
-# Only inject the default HF dataset when the caller did not pick a data source.
+# Only inject the default corpora when the caller did not pick a data source.
 if [[ "$*" != *"--csv-path"* && "$*" != *"--hf-dataset"* ]]; then
-  ARGS+=(--hf-dataset "${HF_DATASET}")
+  for spec in ${HF_DATASETS}; do
+    ARGS+=(--hf-dataset "${spec}")
+  done
+fi
+
+if [[ -n "${VAL_DATASET}" && "$*" != *"--val-"* && "$*" != *"--csv-path"* ]]; then
+  ARGS+=(--val-dataset "${VAL_DATASET}")
 fi
 
 log "Training: epochs=${EPOCHS} batch_size=${BATCH_SIZE} lr=${LEARNING_RATE}"

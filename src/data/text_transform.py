@@ -4,20 +4,28 @@ from typing import List, Dict
 class TextTransform:
     """
     Maps characters to integers and vice versa for CTC loss and speech recognition.
-    Includes standard English alphabet, space, apostrophes, and Akan special characters (ɛ, ɔ).
+    Includes standard English alphabet, space, apostrophes, Akan special characters
+    (ɛ, ɔ) and the digits 0-9.
+
+    Characters outside the vocabulary are dropped during encoding. Digits are
+    included because corpora such as the health ASR set write dosages and dates
+    numerically; dropping them would leave the audio saying a number that the
+    label does not contain, which teaches the model to skip speech. Digits are
+    appended last so the letter indices stay stable when the flag is toggled.
     """
 
-    def __init__(self, custom_chars: List[str] = None):
+    def __init__(self, custom_chars: List[str] = None, include_digits: bool = True):
         if custom_chars is not None:
             char_list = custom_chars
         else:
             # Special tokens & Akan characters
-            # Index 0: blank (or custom token), 1: space, 2: apostrophe
+            # Index 0: space, 1: apostrophe, 2-3: Akan vowels, then a-z, then 0-9
             special = ["<SPACE>", "'", "ɛ", "ɔ"]
             alphabet = list(string.ascii_lowercase)
+            digits = list(string.digits) if include_digits else []
             # Combine characters avoiding duplicates
             char_list = []
-            for c in special + alphabet:
+            for c in special + alphabet + digits:
                 if c not in char_list:
                     char_list.append(c)
 

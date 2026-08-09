@@ -19,9 +19,11 @@ class ModelConfig:
     n_feats: int = 128
     stride: int = 2
     dropout: float = 0.1
-    # n_class will be set dynamically based on TextTransform vocabulary size (default 29 or dynamic)
-    n_class: int = 35 
-    blank_label: int = 34  # Usually n_class - 1
+    # Fallbacks only. The CLI builds models from TextTransform.vocab_size so the
+    # vocabulary stays the single source of truth: 4 special + 26 letters +
+    # 10 digits = 40 symbols, plus the CTC blank at index 40.
+    n_class: int = 41
+    blank_label: int = 40  # Always n_class - 1
 
 @dataclass
 class TrainingConfig:
