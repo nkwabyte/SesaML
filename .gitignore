@@ -10,9 +10,14 @@
 .idea/**/shelf
 .idea/
 
+# macOS
+.DS_Store
+*.DS_Store
+
 # AWS User-specific
 .idea/**/aws.xml
-data/
+data/*
+!data/corpus/
 input/
 models/
 output/
