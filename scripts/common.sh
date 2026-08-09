@@ -34,7 +34,21 @@ detect_python() {
     return
   fi
 
-  if [[ -f "${SCRIPT_DIR}/ensure_python.sh" ]]; then
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    echo "${VENV_DIR}/bin/python"
+    return
+  fi
+
+  for candidate in python3.11 python3.12 python3.13 python3.10 python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      if "${candidate}" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)' >/dev/null 2>&1; then
+        echo "${candidate}"
+        return
+      fi
+    fi
+  done
+
+  if [[ -x "${SCRIPT_DIR}/ensure_python.sh" ]]; then
     "${SCRIPT_DIR}/ensure_python.sh"
   else
     echo "python3"
