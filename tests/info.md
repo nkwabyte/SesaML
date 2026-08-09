@@ -7,10 +7,10 @@ scripts/run_tests.sh tests/test_model.py -k forward
 
 ```
 tests/
-├── test_text_transform.py   char ↔ int round-trip, incl. Akan ɛ/ɔ
-├── test_model.py            DeepSpeech forward pass shapes
-├── run_all_tests.py         unittest suite covering the above plus metrics,
-│                            audio transforms and greedy decoding
+├── test_text_transform.py   char ↔ int round-trip, incl. Akan ɛ/ɔ and digits
+├── test_model.py            DeepSpeech and ConformerCTC forward pass shapes & registry
+├── run_all_tests.py         unittest suite covering DeepSpeech, Conformer, metrics,
+│                            audio transforms, greedy decoding, and HF mock dataset
 └── info.md                  this file
 ```
 

@@ -4,35 +4,37 @@ The SesaML pipeline: audio in, Akan text out.
 
 ```
 src/
-├── config.py            all tunables — audio, model, training, paths
+├── config.py            all tunables — audio, model, training, paths, device auto-detection
 ├── main.py              CLI: train / evaluate / transcribe / export
 ├── data/
-│   ├── text_transform.py   char ↔ int mapping for CTC (a-z, ɛ, ɔ, ', space)
+│   ├── text_transform.py   char ↔ int mapping for CTC (a-z, 0-9, ɛ, ɔ, ', space)
 │   ├── audio_transforms.py MelSpectrogram, SpecAugment masking
 │   ├── dataset.py          CSV-backed dataset + collate function
 │   └── hf_dataset.py       HuggingFace corpora, multi-corpus concatenation
 ├── models/
+│   ├── __init__.py         architecture registry (build_architecture, subsampling_factor)
+│   ├── conformer.py        Conformer-CTC encoder (attention + depthwise conv)
 │   ├── deepspeech.py       DeepSpeech2-style CNN + BiGRU CTC model
 │   └── whisper_model.py    wrapper around a fine-tuned HF Whisper
 ├── training/
-│   ├── trainer.py          training loop, checkpointing, metric logging
-│   └── evaluator.py        CTC loss, greedy decoding, WER/CER
+│   ├── trainer.py          training loop, length-aware forwarding, checkpointing, metric logging
+│   └── evaluator.py        CTC loss, length-aware forwarding, greedy decoding, WER/CER
 ├── inference/
-│   ├── transcribe.py       Transcriber (cached) + transcribe_audio (one-shot)
+│   ├── transcribe.py       Transcriber (cached) + transcribe_audio (auto-detects architecture)
 │   └── export.py           TorchScript / state dict / ExecuTorch export
 └── utils/
     ├── metrics.py          WER/CER (jiwer, with a pure-Python fallback)
     ├── noise_reduction.py  optional spectral gate pre-processing
-    └── run_logger.py       RunManager — the outputs/ directory contract
+    └── run_logger.py       RunManager — outputs/ contract, save_model_meta, load_model_meta
 ```
 
 ## Entry point
 
 ```bash
-python -m src.main train --help
-python -m src.main evaluate --model-path outputs/checkpoints/<run>/best_model.pt
-python -m src.main transcribe --audio clip.wav --model-type whisper
-python -m src.main export --format torchscript
+python -m src.main train --architecture conformer --device mps
+python -m src.main evaluate --architecture conformer --device mps
+python -m src.main transcribe --audio clip.wav --model-type deepspeech --architecture conformer
+python -m src.main export --architecture conformer --format torchscript
 ```
 
 The [scripts/](../scripts/info.md) wrappers are the friendlier way in — they
@@ -44,6 +46,10 @@ handle the venv, `.env` and sensible defaults.
 the run directory, the logger and the metric files. If you add a command, open a
 run for it too — that is what keeps `outputs/` complete. See
 [outputs/info.md](../outputs/info.md).
+
+**Architecture registry & `model_meta.json`.** `build_architecture()` builds CTC models by name (`deepspeech`, `conformer`, `conformer-medium`). Checkpoints save `model_meta.json` in their directory so `load_deepspeech_model()`, evaluation, export, and the web app auto-detect the architecture without manual configuration. Time subsampling factors (2× for DeepSpeech, 4× for Conformer) are derived via `subsampling_factor(arch)` so CTC sequence lengths align exactly.
+
+**Apple Silicon MPS & Device Auto-Detection.** `PipelineConfig` automatically selects `mps` (Metal) on Apple Silicon Macs, `cuda` on NVIDIA GPUs, or `cpu`. The `--device` flag overrides this per command.
 
 **The vocabulary is small and fixed.** `TextTransform` covers `a-z`, `0-9`,
 apostrophe, and the Akan characters `ɛ` and `ɔ`, plus space and a CTC blank —

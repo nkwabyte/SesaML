@@ -23,8 +23,8 @@ outputs/
 │       ├── dataset_manifest.json rows, columns, sample transcripts (downloads)
 │       ├── export_manifest.json exported artifact: format, size, SHA-256
 │       └── summary.json         status, duration, headline metrics
-├── checkpoints/<run_id>/        training weights          — NOT in git
-└── exports/<run_id>/            exported .pt/.pth/.pte    — NOT in git
+├── checkpoints/<run_id>/        training weights + model_meta.json — NOT in git
+└── exports/<run_id>/            exported .pt/.pth/.pte            — NOT in git
 ```
 
 ## What is tracked
