@@ -1251,3 +1251,10 @@ fabric.properties
 # Android studio 3.1+ serialized cache file
 .idea/caches/build_file_checksums.ser
 
+# Local AI assistant / prompt context files (ignored from git)
+GEMINI.md
+CLAUDE.md
+.gemini/
+.claude/
+
+

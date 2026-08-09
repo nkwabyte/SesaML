@@ -26,6 +26,7 @@ scripts/serve_app.sh                  # try it in a browser
 | [data/](data/info.md) | checked-in corpus; downloaded audio stays untracked |
 | [outputs/](outputs/info.md) | run logs, metrics and checkpoints |
 | [tests/](tests/info.md) | fast dependency-light test suite |
+| [docs/](docs/info.md) | architecture, diarization blueprint, and roadmap |
 | `notebooks/` | exploratory analysis |
 
 Each folder has its own `info.md` with the details.
