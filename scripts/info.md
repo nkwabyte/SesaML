@@ -12,6 +12,7 @@ chmod +x scripts/*.sh      # once, after cloning
 | --- | --- |
 | `setup_env.sh` | Creates `.venv`, installs `requirements.txt`, seeds `.env` and the `outputs/` tree. |
 | `download_dataset.sh` | Downloads a HuggingFace speech dataset into `data/` and writes a manifest to `outputs/`. |
+| `download_all_datasets.sh` | Downloads all 3 Akan speech datasets into `data/` at a go (`ghanaopendata`, `Lagyamfi`, `ghananlpcommunity`). |
 | `train.sh` | Starts a training run; logs, metrics and checkpoints go to `outputs/`. |
 | `evaluate.sh` | Scores a checkpoint (loss/WER/CER) and saves per-sample predictions. |
 | `transcribe.sh` | Transcribes one audio file and stores the transcript. |
@@ -19,6 +20,8 @@ chmod +x scripts/*.sh      # once, after cloning
 | `serve_app.sh` | Serves the Gradio web app from `app/app.py`. |
 | `run_tests.sh` | Runs the test suite (pytest, falling back to `tests/run_all_tests.py`). |
 | `summarize_runs.py` | Prints a table of all recorded runs from `outputs/runs/index.jsonl`. |
+| `ensure_python.sh` | Checks for compatible Python (>=3.10, <3.14) on Linux/macOS; auto-installs Python 3.11 via `uv` or `apt` if missing. |
+| `ensure_python.ps1` | Checks for compatible Python on Windows; auto-installs Python 3.11 via `uv` or `winget` if missing. |
 | `common.sh` | Shared bash helpers; sourced by the others, not run directly. |
 
 ## Typical flow

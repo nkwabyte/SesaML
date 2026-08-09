@@ -63,6 +63,8 @@ class HuggingFaceAkanDataset(Dataset):
     def _detect_text_column(self) -> str:
         """Finds the transcription column, failing loudly rather than training on empty labels."""
         columns = list(getattr(self.hf_dataset, "column_names", []) or [])
+        if not columns and len(self.hf_dataset) > 0 and hasattr(self.hf_dataset[0], "keys"):
+            columns = list(self.hf_dataset[0].keys())
         for candidate in TEXT_COLUMNS:
             if candidate in columns:
                 return candidate
