@@ -61,6 +61,39 @@ def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
+def _make_stream_utf8(stream) -> None:
+    """
+    Best-effort switch of a text stream to UTF-8 with lossy fallback.
+
+    Only meaningful on Windows, where the console encoding is cp1252 and any
+    Twi transcript containing ɛ or ɔ raises on write.
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
+def load_weights(path, map_location=None) -> Dict[str, Any]:
+    """
+    Reads model weights from either checkpoint layout.
+
+    `speech_recognition_model.pt` is a plain state_dict, while `last_model.pt`
+    and `best_model.pt` wrap one alongside optimizer and schedule state so a run
+    can be resumed. Inference and export want only the weights, and should not
+    fail because they were handed the resumable file.
+    """
+    import torch
+
+    state = torch.load(str(path), map_location=map_location, weights_only=False)
+    if isinstance(state, dict) and "model" in state and isinstance(state["model"], dict):
+        return state["model"]
+    return state
+
+
 def resolve_path(path) -> Path:
     """Resolves a path relative to the project root so runs launched from any
     working directory still write into the same ``outputs/`` tree."""
@@ -182,6 +215,12 @@ class RunManager:
         logger.addHandler(file_handler)
 
         if console:
+            # Windows consoles default to cp1252, which cannot encode the Akan
+            # vowels ɛ and ɔ - logging a single real transcript would raise
+            # UnicodeEncodeError and take the training run down with it. Retarget
+            # stdout at UTF-8 where possible, and fall back to replacing the
+            # characters rather than letting a log line kill an hour of training.
+            _make_stream_utf8(sys.stdout)
             stream_handler = logging.StreamHandler(sys.stdout)
             stream_handler.setFormatter(formatter)
             logger.addHandler(stream_handler)

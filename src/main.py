@@ -13,13 +13,16 @@ from src.inference.transcribe import load_deepspeech_model, transcribe_audio
 from src.models import ARCHITECTURES, build_architecture, subsampling_factor
 from src.training.trainer import Trainer
 from src.training.evaluator import Evaluator
-from src.utils.run_logger import RunManager, resolve_checkpoint
+from src.utils.run_logger import RunManager, load_weights, resolve_checkpoint
 
-# torchaudio's MelSpectrogram defaults to n_fft=400, hop_length=n_fft//2.
-MEL_HOP_LENGTH = 200
 # Beyond this many mel frames a clip dominates GPU memory at normal batch sizes.
 LONG_CLIP_FRAMES = 1200
 MIN_VOCAB_COVERAGE = 0.97
+
+
+def _is_punctuation(ch: str) -> bool:
+    """True for marks a speaker does not pronounce, which CTC targets shed on purpose."""
+    return not ch.isalnum() and not ch.isspace()
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SesaML - Akan Audio Speech-to-Text Transcriber & Trainer")
@@ -51,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--batch-size", type=int, default=10, help="Batch size")
     train_parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
     train_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
+    train_parser.add_argument("--resume", default=None, metavar="CHECKPOINT", help="Continue training from a run's last_model.pt or best_model.pt, restoring optimizer and schedule state")
+    train_parser.add_argument("--num-workers", type=int, default=None, help="DataLoader worker processes (default: one per core, capped at 8)")
+    train_parser.add_argument("--no-amp", dest="use_amp", action="store_false", default=None, help="Disable CUDA mixed precision (enabled by default on CUDA)")
+    train_parser.add_argument("--grad-clip", type=float, default=None, help="Max gradient norm (default 5.0; 0 disables clipping)")
+    train_parser.add_argument("--allow-no-validation", action="store_true", help="Permit a multi-epoch run with no validation set (no WER/CER will be computed)")
     train_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
 
     # Evaluate sub-command
@@ -79,6 +87,12 @@ def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path):
     Builds the dataset to train or evaluate on. One or more HuggingFace corpora
     (`repo[:split]` specs) are concatenated; otherwise a CSV-backed dataset is used.
     Returns the dataset plus a per-corpus description for the run log.
+
+    There is deliberately no default corpus. This used to fall back to
+    `data/corpus/verified_data.csv`, which is a text-only translation table with
+    no audio: a bare `python -m src.main train` silently trained on it for 30
+    epochs. scripts/train.sh supplies the real corpora, and anyone bypassing the
+    script should have to say what they mean.
     """
     if hf_datasets:
         specs = [hf_datasets] if isinstance(hf_datasets, str) else list(hf_datasets)
@@ -86,20 +100,69 @@ def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path):
         parts = load_hf_datasets(specs, sample_rate=config.audio.sample_rate, default_split=split)
         return combine_datasets(parts), [part.probe() for part in parts]
 
-    csv_file = csv_path or os.path.join(config.paths.corpus_dir, "verified_data.csv")
-    dataset = AkanAudioDataset(csv_file=csv_file, sample_rate=config.audio.sample_rate)
-    return dataset, [{"csv": csv_file, "rows": len(dataset)}]
+    if not csv_path:
+        raise ValueError(
+            "No data source given. Pass --hf-dataset REPO[:SPLIT] (repeatable) or "
+            "--csv-path PATH to a manifest with audio-path and transcription columns. "
+            "scripts/train.sh supplies the project's default Akan corpora."
+        )
+
+    dataset = AkanAudioDataset(csv_file=csv_path, sample_rate=config.audio.sample_rate)
+    # Probing costs a few seconds and catches a corpus whose audio paths are all
+    # stale before the run burns an hour producing a blank-emitting model.
+    return dataset, [dataset.probe()]
 
 def log_corpus_report(run, report: dict, role: str, config: PipelineConfig) -> None:
-    """Logs a corpus probe and warns about the two things that silently bite."""
+    """
+    Logs a corpus probe, then aborts on the failures that otherwise train to a
+    perfect-looking zero loss, and warns about the ones that merely degrade it.
+    """
     run.logger.info("%s corpus: %s", role, report)
 
+    name = report.get("dataset")
+    sampled = report.get("sampled") or 0
+
+    if report.get("rows") == 0:
+        raise ValueError(f"{role} corpus '{name}' is empty - nothing to {role.lower()} on.")
+
+    # A corpus whose sampled audio is entirely absent will either raise per-row
+    # mid-epoch or, worse, train on noise. Fail now, with the path in hand.
+    missing = report.get("audio_missing")
+    if missing is not None and sampled and missing == sampled:
+        raise FileNotFoundError(
+            f"{role} corpus '{name}': none of the {sampled} sampled audio files exist. "
+            f"The manifest's paths are wrong, relative to another machine, or the audio "
+            f"was never downloaded. Check the '{report.get('audio_column')}' column."
+        )
+    if missing:
+        run.logger.warning(
+            "%s corpus '%s': %d of %d sampled audio files are missing; those rows will "
+            "raise during training.", role, name, missing, sampled
+        )
+
+    # Zero-length CTC targets are minimised by emitting blanks, so the loss goes
+    # to exactly 0.0 and the run looks converged while having learned nothing.
+    text_sampled = report.get("text_sampled") or 0
+    empty = report.get("empty_labels")
+    if empty is not None and text_sampled and empty == text_sampled:
+        raise ValueError(
+            f"{role} corpus '{name}': all {text_sampled} sampled transcripts encode to "
+            f"empty label sequences. Column '{report.get('text_column')}' is blank or "
+            f"holds text entirely outside the CTC vocabulary. Training on this yields a "
+            f"CTC loss of 0.0 and a model that only emits blanks."
+        )
+    if empty:
+        run.logger.warning(
+            "%s corpus '%s': %d of %d sampled transcripts are empty after encoding.",
+            role, name, empty, text_sampled
+        )
+
     median = report.get("duration_median_sec")
-    if median and median * config.audio.sample_rate / MEL_HOP_LENGTH > LONG_CLIP_FRAMES:
+    if median and median * config.audio.frames_per_second > LONG_CLIP_FRAMES:
         run.logger.warning(
             "%s clips average %.1fs (~%d mel frames). That is %.0fx the sequence length of a "
             "typical 4s clip; reduce --batch-size (try 2) if training runs out of memory.",
-            report.get("dataset"), median, median * config.audio.sample_rate / MEL_HOP_LENGTH,
+            report.get("dataset"), median, median * config.audio.frames_per_second,
             median / 4.0
         )
 
@@ -112,11 +175,24 @@ def log_corpus_report(run, report: dict, role: str, config: PipelineConfig) -> N
             report.get("dataset")
         )
 
+    # Punctuation is not spoken, so dropping it from CTC targets is correct and
+    # accounts for essentially all of the ~4% these corpora lose. Warning on the
+    # raw coverage would fire on every healthy corpus and train people to ignore
+    # it; what matters is whether *letters* are going missing.
+    dropped = report.get("dropped_chars") or []
+    lost_letters = [(ch, n) for ch, n in dropped if not _is_punctuation(ch)]
     coverage = report.get("coverage")
-    if coverage is not None and coverage < MIN_VOCAB_COVERAGE:
+
+    if lost_letters:
         run.logger.warning(
-            "%s vocabulary coverage is %.1f%% (dropped: %s)",
-            report.get("dataset"), 100 * coverage, report.get("dropped_chars")
+            "%s drops %d non-punctuation characters the audio still says: %s. "
+            "These are outside the CTC vocabulary, so the labels will not match "
+            "the speech.", report.get("dataset"), sum(n for _, n in lost_letters), lost_letters
+        )
+    elif coverage is not None and coverage < MIN_VOCAB_COVERAGE:
+        run.logger.info(
+            "%s vocabulary coverage is %.1f%%; all dropped characters are punctuation (%s).",
+            report.get("dataset"), 100 * coverage, dropped
         )
 
 
@@ -134,8 +210,33 @@ def loader_kwargs(config: PipelineConfig) -> dict:
     }
     if config.training.num_workers > 0:
         kwargs["persistent_workers"] = True
-        kwargs["prefetch_factor"] = 2
+        # Four batches queued per worker keeps the GPU fed across the jitter in
+        # decode time between a 1-second clip and a 30-second one.
+        kwargs["prefetch_factor"] = 4
     return kwargs
+
+
+def train_transforms_for(config: PipelineConfig):
+    """Training front-end built from the audio config, so every caller agrees on the features."""
+    return get_train_audio_transforms(
+        sample_rate=config.audio.sample_rate,
+        n_mels=config.audio.n_mels,
+        freq_mask_param=config.audio.freq_mask_param,
+        time_mask_param=config.audio.time_mask_param,
+        n_fft=config.audio.n_fft,
+        hop_length=config.audio.hop_length,
+        time_mask_ratio=config.audio.time_mask_ratio,
+    )
+
+
+def valid_transforms_for(config: PipelineConfig):
+    """Validation/inference front-end; identical features, no augmentation."""
+    return get_valid_audio_transforms(
+        sample_rate=config.audio.sample_rate,
+        n_mels=config.audio.n_mels,
+        n_fft=config.audio.n_fft,
+        hop_length=config.audio.hop_length,
+    )
 
 
 def build_model(config: PipelineConfig, n_class: int) -> torch.nn.Module:
@@ -184,12 +285,18 @@ def run_train(args, config: PipelineConfig) -> None:
     config.training.epochs = args.epochs
     config.training.batch_size = args.batch_size
     config.training.learning_rate = args.lr
+    if args.num_workers is not None:
+        config.training.num_workers = args.num_workers
+    if args.use_amp is not None:
+        config.training.use_amp = args.use_amp
+    if args.grad_clip is not None:
+        config.training.grad_clip_norm = args.grad_clip
 
     run = RunManager(kind="train", config=config, run_id=args.run_id, params=vars(args))
     try:
         text_transform = TextTransform()
-        train_transforms = get_train_audio_transforms(config.audio.sample_rate, config.audio.n_mels)
-        valid_transforms = get_valid_audio_transforms(config.audio.sample_rate, config.audio.n_mels)
+        train_transforms = train_transforms_for(config)
+        valid_transforms = valid_transforms_for(config)
 
         dataset, sources = build_dataset(config, args.hf_dataset, args.split, args.csv_path)
         for source in sources:
@@ -238,6 +345,16 @@ def run_train(args, config: PipelineConfig) -> None:
                 collate_fn=valid_collate,
                 **loader_kwargs(config)
             )
+        elif config.training.epochs > 1 and not args.allow_no_validation:
+            # Without a validation set there is no WER, no CER, and best-model
+            # selection silently falls back to training loss - which is exactly
+            # how a run that had learned nothing still reported a "best epoch".
+            raise ValueError(
+                f"Refusing to train {config.training.epochs} epochs with no validation set: "
+                f"there would be no WER/CER and the best checkpoint would be chosen on "
+                f"training loss alone. Pass --val-dataset REPO:SPLIT, --val-split SPLIT or "
+                f"--val-csv-path PATH, or --allow-no-validation to proceed anyway."
+            )
 
         model = build_model(config, text_transform.vocab_size)
 
@@ -247,7 +364,8 @@ def run_train(args, config: PipelineConfig) -> None:
             val_loader=val_loader,
             config=config,
             text_transform=text_transform,
-            run=run
+            run=run,
+            resume_from=args.resume
         )
         trainer.train()
 
@@ -272,7 +390,7 @@ def run_evaluate(args, config: PipelineConfig) -> None:
         config.device = args.device
     with RunManager(kind="evaluate", config=config, run_id=args.run_id, params=vars(args)) as run:
         text_transform = TextTransform()
-        valid_transforms = get_valid_audio_transforms(config.audio.sample_rate, config.audio.n_mels)
+        valid_transforms = valid_transforms_for(config)
 
         dataset, sources = build_dataset(config, args.hf_dataset, args.split, args.csv_path)
         for source in sources:
@@ -293,7 +411,7 @@ def run_evaluate(args, config: PipelineConfig) -> None:
         model_path = resolve_checkpoint(args.model_path, config)
         model = build_model(config, text_transform.vocab_size)
         if os.path.exists(model_path):
-            model.load_state_dict(torch.load(model_path, map_location=config.device))
+            model.load_state_dict(load_weights(model_path, map_location=config.device))
             run.logger.info("Loaded checkpoint %s", model_path)
         else:
             run.logger.warning("Checkpoint %s not found - evaluating an untrained model", model_path)

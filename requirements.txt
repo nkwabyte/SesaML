@@ -5,6 +5,12 @@
 # Core Deep Learning & Audio Processing
 torch==2.9.0
 torchaudio==2.9.0
+# torchaudio 2.9 dropped its own sox/soundfile backends: load/info/save are now
+# delegates to torchcodec, which torchaudio does not itself depend on. Without
+# this pin every audio read raises ImportError. src/utils/audio_io.py falls back
+# to soundfile, so the pipeline survives a torchcodec that will not install
+# (it needs a matching FFmpeg), but decoding is narrower without it.
+torchcodec==0.9.0
 transformers==4.57.1
 librosa==0.11.0
 soundfile==0.13.1

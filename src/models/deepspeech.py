@@ -63,10 +63,24 @@ class BidirectionalGRU(nn.Module):
         self.layer_norm = nn.LayerNorm(rnn_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = self.layer_norm(x)
         x = F.gelu(x)
-        x, _ = self.bi_gru(x)
+
+        if lengths is None:
+            x, _ = self.bi_gru(x)
+        else:
+            # The backward pass of a bidirectional GRU starts at the last frame,
+            # which on a padded batch is silence - so every short clip's reverse
+            # state is primed with padding before it ever reaches real speech.
+            # Packing confines both directions to the valid frames.
+            frames = x.size(1)
+            packed = nn.utils.rnn.pack_padded_sequence(
+                x, lengths.cpu().clamp(min=1, max=frames), batch_first=True, enforce_sorted=False
+            )
+            packed, _ = self.bi_gru(packed)
+            x, _ = nn.utils.rnn.pad_packed_sequence(packed, batch_first=True, total_length=frames)
+
         x = self.dropout(x)
         return x
 
@@ -83,11 +97,11 @@ class SpeechRecognitionModel(nn.Module):
 
     def __init__(
         self,
+        n_class: int,
         n_cnn_layers: int = 3,
         n_rnn_layers: int = 5,
         rnn_dim: int = 512,
-        n_class: int = 35,
-        n_feats: int = 128,
+        n_feats: int = 80,
         stride: int = 2,
         dropout: float = 0.1
     ):
@@ -103,7 +117,9 @@ class SpeechRecognitionModel(nn.Module):
 
         self.fc = nn.Linear(32 * n_feats_conv, rnn_dim)
 
-        self.birnn_layers = nn.Sequential(*[
+        # A ModuleList rather than a Sequential: each block needs the valid frame
+        # counts passed alongside the features, which Sequential cannot forward.
+        self.birnn_layers = nn.ModuleList([
             BidirectionalGRU(
                 rnn_dim=rnn_dim if i == 0 else rnn_dim * 2,
                 hidden_size=rnn_dim,
@@ -122,8 +138,9 @@ class SpeechRecognitionModel(nn.Module):
 
     def forward(self, x: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         # Input shape: (batch, channel=1, feature=n_mels, time)
-        # `lengths` is accepted so every architecture shares one call signature;
-        # recurrent layers handle padding without an explicit mask, so it is unused.
+        # `lengths` carries the valid frame counts, already divided by
+        # subsampling_factor by the collate function. They are threaded into the
+        # GRUs so the recurrence never consumes padding.
         x = self.cnn(x)
         x = self.rescnn_layers(x)
 
@@ -133,6 +150,7 @@ class SpeechRecognitionModel(nn.Module):
         x = x.transpose(1, 2)
 
         x = self.fc(x)
-        x = self.birnn_layers(x)
+        for layer in self.birnn_layers:
+            x = layer(x, lengths)
         x = self.classifier(x)
         return x

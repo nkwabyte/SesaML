@@ -23,12 +23,18 @@ data/*
 !data/info.md
 
 ### Project layout
-# Run outputs (logs, metrics, configs, predictions) are tracked; the weight and
-# export directories are not. See outputs/.gitignore for the exact rules.
+# Run artifacts are deliberately NOT tracked: a run writes per-epoch metrics,
+# predictions and a log, and at a few runs a day that buries real diffs in
+# machine-generated churn. Keep the directory structure, drop the contents -
+# the exact rules live in outputs/.gitignore, which is the single place to
+# change this. `scripts/summarize_runs.py` aggregates runs locally instead.
 !outputs/
 # Helper scripts are tracked. This needs no negation pattern: the broad
 # "[Ss]cripts" venv rule below is scoped to virtualenv roots instead. A blanket
 # "!/scripts/**" would also re-include .DS_Store and other junk under scripts/.
+
+# ssh details
+ssh-details.txt
 
 # Model weights and exported models are never committed, wherever they live.
 *.pt

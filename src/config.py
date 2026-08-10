@@ -1,15 +1,30 @@
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
 import torch
 
 @dataclass
 class AudioConfig:
     sample_rate: int = 16000
-    n_mels: int = 128
-    freq_mask_param: int = 30
+    # 80 log-mel bands over a 400-sample (25ms) window with a 160-sample (10ms)
+    # hop - the standard ASR front-end. n_mels was 128 against the same 400-point
+    # FFT, whose 201 frequency bins cannot support that many triangular filters:
+    # four of them came out entirely empty, wasting input dimensions and warning
+    # on every run.
+    n_mels: int = 80
+    n_fft: int = 400
+    hop_length: int = 160
+    # SpecAugment. freq_mask_param is ~1/3 of n_mels, matching the paper's LB
+    # policy; time masks are additionally capped at a fraction of the utterance
+    # so a short clip is not erased outright.
+    freq_mask_param: int = 27
     time_mask_param: int = 100
+    time_mask_ratio: float = 0.2
     apply_noise_reduction: bool = False
+
+    @property
+    def frames_per_second(self) -> float:
+        """Mel frames produced per second of audio; used to size clips and batches."""
+        return self.sample_rate / self.hop_length
 
 @dataclass
 class ModelConfig:
@@ -18,22 +33,30 @@ class ModelConfig:
     n_cnn_layers: int = 3
     n_rnn_layers: int = 5
     rnn_dim: int = 512
-    n_feats: int = 128
     stride: int = 2
     dropout: float = 0.1
-    # Fallbacks only. The CLI builds models from TextTransform.vocab_size so the
-    # vocabulary stays the single source of truth: 4 special + 26 letters +
-    # 10 digits = 40 symbols, plus the CTC blank at index 40.
-    n_class: int = 41
-    blank_label: int = 40  # Always n_class - 1
+    # The input feature count is AudioConfig.n_mels, not a field here: two
+    # separately-editable copies of the same number silently produce a shape
+    # mismatch the moment one is changed. Likewise n_class comes from the live
+    # TextTransform vocabulary, so the model and the label encoding cannot
+    # disagree - see build_architecture().
 
 @dataclass
 class TrainingConfig:
     batch_size: int = 10
     epochs: int = 10
     learning_rate: float = 5e-4
-    num_workers: int = 1
+    # Decoding and mel-transforming audio on the main process starves the GPU.
+    # Default to the machine's cores, capped: past ~8 workers the gain is small
+    # and each one holds a copy of the dataset.
+    num_workers: int = field(default_factory=lambda: min(8, max(1, (os.cpu_count() or 2) - 1)))
     pin_memory: bool = True
+    # CTC gradients spike when a batch mixes very short and very long targets;
+    # unclipped, one such batch can undo an epoch of progress.
+    grad_clip_norm: float = 5.0
+    # Mixed precision on CUDA. The encoder runs in fp16 while log_softmax and the
+    # CTC loss stay in fp32, which is where the numerical sensitivity lives.
+    use_amp: bool = True
     logging_freq: int = 100
     checkpoint_dir: str = "outputs/checkpoints"
     model_name: str = "speech_recognition_model.pt"

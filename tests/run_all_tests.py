@@ -34,19 +34,19 @@ class TestSesaML(unittest.TestCase):
         self.assertGreater(calculate_wer(ref, hyp_diff), 0.0)
 
     def test_audio_transforms(self):
-        train_tf = get_train_audio_transforms(16000, 128)
-        valid_tf = get_valid_audio_transforms(16000, 128)
+        train_tf = get_train_audio_transforms(16000, 80)
+        valid_tf = get_valid_audio_transforms(16000, 80)
 
         waveform = torch.randn(1, 16000)
         train_spec = train_tf(waveform)
         valid_spec = valid_tf(waveform)
 
-        self.assertEqual(train_spec.shape[1], 128)
-        self.assertEqual(valid_spec.shape[1], 128)
+        self.assertEqual(train_spec.shape[1], 80)
+        self.assertEqual(valid_spec.shape[1], 80)
 
     def test_deepspeech_model(self):
         batch_size = 2
-        n_mels = 128
+        n_mels = 80
         time_steps = 100
         n_class = 35
 
@@ -68,7 +68,7 @@ class TestSesaML(unittest.TestCase):
     def test_conformer_model(self):
         from src.models.conformer import ConformerCTC
         batch_size = 2
-        n_mels = 128
+        n_mels = 80
         time_steps = 100
         n_class = 35
 

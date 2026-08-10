@@ -2,7 +2,6 @@ import os
 from typing import Any, Dict, Optional
 import torch
 import torch.nn.functional as F
-import torchaudio
 
 from ..config import PipelineConfig
 from ..data.text_transform import TextTransform
@@ -10,8 +9,9 @@ from ..data.audio_transforms import get_valid_audio_transforms
 from ..models import build_architecture, SpeechRecognitionModel
 from ..models.whisper_model import WhisperASR
 from ..training.evaluator import greedy_decoder
+from ..utils.audio_io import load_audio
 from ..utils.noise_reduction import reduce_audio_noise
-from ..utils.run_logger import load_model_meta, resolve_checkpoint
+from ..utils.run_logger import load_model_meta, load_weights, resolve_checkpoint
 
 DEFAULT_WHISPER_REPO = "CiBeDL/twi_trained_whisper"
 
@@ -32,8 +32,7 @@ def load_deepspeech_model(
     model = build_architecture(arch_name, n_class, config).to(device)
 
     if os.path.exists(model_path):
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict)
+        model.load_state_dict(load_weights(model_path, map_location=device))
     model.eval()
     return model
 
@@ -73,9 +72,14 @@ class Transcriber:
                 text_transform=self.text_transform
             )
 
+        # Inference must use exactly the features training used - n_fft and
+        # hop_length included, or the model sees a different time resolution
+        # than it was trained on.
         self._audio_transforms = get_valid_audio_transforms(
             sample_rate=self.config.audio.sample_rate,
-            n_mels=self.config.audio.n_mels
+            n_mels=self.config.audio.n_mels,
+            n_fft=self.config.audio.n_fft,
+            hop_length=self.config.audio.hop_length
         )
 
     @property
@@ -98,10 +102,7 @@ class Transcriber:
         if self.model_type == "whisper":
             return self._whisper.transcribe(audio_path)
 
-        waveform, sr = torchaudio.load(audio_path)
-        if sr != self.config.audio.sample_rate:
-            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.config.audio.sample_rate)
-            waveform = resampler(waveform)
+        waveform, _ = load_audio(audio_path, target_sample_rate=self.config.audio.sample_rate)
 
         if apply_noise_reduction:
             waveform = reduce_audio_noise(waveform, sample_rate=self.config.audio.sample_rate)

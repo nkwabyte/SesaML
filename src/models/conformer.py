@@ -106,6 +106,17 @@ class ConformerCTC(nn.Module):
             # Guard against a collate that rounded up past the real frame count.
             lengths = lengths.to(x.device).clamp(min=1, max=frames)
 
+        # torchaudio's Conformer builds its padding mask with width
+        # `lengths.max()` and then asserts that width equals the input's time
+        # dimension. The collate function derives lengths as `time // 4`, which
+        # floors, while two stride-2 convolutions with padding=1 ceil - so on a
+        # ragged batch the mask comes out one frame short of `x` and the encoder
+        # raises. Trimming to the longest real length reconciles the two and only
+        # ever discards frames that are entirely padding.
+        longest = int(lengths.max())
+        if longest < frames:
+            x = x[:, :longest]
+
         encoded, _ = self.encoder(x, lengths)
         return self.classifier(encoded)
 
