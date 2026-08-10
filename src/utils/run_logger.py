@@ -16,6 +16,7 @@ import csv
 import json
 import logging
 import platform
+import re
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
@@ -31,6 +32,19 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 SENSITIVE_PARAM_KEYS = {"token", "hf_token", "auth_token", "api_key", "secret", "password", "access_token"}
 
+# Catches credentials that land in values rather than obviously-named keys - e.g. a token
+# echoed inside an error message or a URL - which key-name matching alone would miss.
+SECRET_VALUE_PATTERN = re.compile(
+    r"\b(?:hf_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})"
+)
+
+
+def _scrub_secrets(value: Any) -> Any:
+    """Replaces credential-shaped substrings inside a value with a redaction marker."""
+    if isinstance(value, str):
+        return SECRET_VALUE_PATTERN.sub("[REDACTED]", value)
+    return value
+
 
 def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """Redacts sensitive values such as tokens and API keys from recorded run parameters."""
@@ -40,8 +54,10 @@ def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[key] = _sanitize_params(value)
         elif isinstance(key, str) and any(s in key.lower() for s in SENSITIVE_PARAM_KEYS) and value:
             sanitized[key] = "[REDACTED]"
+        elif isinstance(value, (list, tuple)):
+            sanitized[key] = type(value)(_scrub_secrets(item) for item in value)
         else:
-            sanitized[key] = value
+            sanitized[key] = _scrub_secrets(value)
     return sanitized
 
 
@@ -299,6 +315,9 @@ class RunManager:
             "log_file": _relative_to_root(self.log_path),
         }
         record.update(summary or {})
+        # Re-sanitize after merging: a caller's summary (an error message quoting a
+        # signed URL, say) can carry credentials the constructor never saw.
+        record = _sanitize_params(record)
         self.write_json("summary.json", record)
 
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
