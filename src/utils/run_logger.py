@@ -29,6 +29,22 @@ LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+SENSITIVE_PARAM_KEYS = {"token", "hf_token", "auth_token", "api_key", "secret", "password", "access_token"}
+
+
+def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Redacts sensitive values such as tokens and API keys from recorded run parameters."""
+    sanitized: Dict[str, Any] = {}
+    for key, value in params.items():
+        if isinstance(value, dict):
+            sanitized[key] = _sanitize_params(value)
+        elif isinstance(key, str) and any(s in key.lower() for s in SENSITIVE_PARAM_KEYS) and value:
+            sanitized[key] = "[REDACTED]"
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
 def resolve_path(path) -> Path:
     """Resolves a path relative to the project root so runs launched from any
     working directory still write into the same ``outputs/`` tree."""
@@ -107,7 +123,7 @@ class RunManager:
     ):
         self.kind = kind
         self.config = config
-        self.params = dict(params or {})
+        self.params = _sanitize_params(dict(params or {}))
         self.started_at = datetime.now()
         self.run_id = run_id or f"{kind}-{self.started_at.strftime(RUN_ID_FORMAT)}"
 
