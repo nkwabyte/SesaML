@@ -88,6 +88,8 @@ class Trainer:
         self.history: list = []
         self._degenerate_steps = 0
         self._last_applied_lr = self.config.training.learning_rate
+        # Set by _publish() when a run is archived in the model registry.
+        self.published_version = None
 
         if resume_from:
             self._load_resume_state(resume_from)
@@ -204,6 +206,64 @@ class Trainer:
             raise ValueError(
                 f"Cannot resume: {path} already completed {self.start_epoch} of "
                 f"{self.config.training.epochs} epochs. Raise --epochs to continue training."
+            )
+
+    def _publish(self, checkpoint: str, history: list) -> None:
+        """
+        Archives this run's best weights in the model registry.
+
+        Publishing is unconditional and promotion is not: the registry serves
+        the new version only if it beats the one already promoted. That is what
+        makes a series of training iterations safe - a run that collapses is
+        recorded for comparison but never becomes the model the demo loads.
+
+        Never fatal. The weights are already on disk by this point, and losing a
+        finished run to a bookkeeping error would be absurd.
+        """
+        best = min(
+            (entry for entry in history if entry.get("wer") is not None),
+            key=lambda entry: entry["wer"],
+            default=history[-1] if history else {},
+        )
+        metrics = {
+            "wer": best.get("wer"),
+            "cer": best.get("cer"),
+            "val_loss": best.get("val_loss"),
+            "train_loss": best.get("train_loss"),
+            "epoch": best.get("epoch"),
+            "epochs_completed": len(history),
+        }
+
+        try:
+            from ..utils.model_registry import ModelRegistry
+
+            registry = ModelRegistry(self.config.paths.output_dir)
+            architecture = getattr(self.config.model, "architecture", "deepspeech")
+            published = registry.publish(
+                checkpoint,
+                architecture=architecture,
+                metrics=metrics,
+                run_id=self.run.run_id,
+                config=self.config,
+                vocab_size=self.text_transform.vocab_size,
+                subsampling_factor=getattr(self.model, "subsampling_factor", None),
+            )
+            self.published_version = published.version
+
+            current = registry.current(architecture)
+            if current is not None and current.version == published.version:
+                self.logger.info("Published %s and promoted it to current.", published)
+            else:
+                serving = current or "nothing"
+                self.logger.warning(
+                    "Published %s but did NOT promote it: %s is better and stays current. "
+                    "Force with `python -m src.main models promote --architecture %s --version %s`.",
+                    published, serving, architecture, published.version
+                )
+        except Exception as exc:
+            self.logger.warning(
+                "Could not publish to the model registry (%s: %s). The checkpoint is "
+                "still at %s.", type(exc).__name__, exc, checkpoint
             )
 
     def _check_loss(self, loss: float, epoch: int, batch_idx: int, label_lengths: torch.Tensor) -> None:
@@ -399,6 +459,7 @@ class Trainer:
             # export load weights, and should not have to know about optimizers.
             torch.save(self.model.state_dict(), checkpoint_path)
             self.logger.info("Model saved successfully to %s", checkpoint_path)
+            self._publish(best_path if os.path.exists(best_path) else checkpoint_path, history)
         except KeyboardInterrupt:
             self.status = "interrupted"
             torch.save(self._training_state(epoch), last_path)
@@ -424,6 +485,7 @@ class Trainer:
                 "resumable_checkpoint": last_path,
                 "resumed_from_epoch": self.start_epoch or None,
                 "mixed_precision": self.use_amp,
+                "published_version": self.published_version,
             }
             # Only close the run when this Trainer created it; otherwise the
             # caller owns the lifecycle and merges `summary` into its own finish.

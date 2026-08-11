@@ -110,6 +110,22 @@ class AkanAudioDataset(Dataset):
             return os.path.join(self.audio_dir, audio_path)
         return audio_path
 
+    def durations(self) -> List[float]:
+        """
+        Per-row clip length in seconds, for length-bucketed batching.
+
+        Headers only, so this does not decode the audio; rows whose file is
+        missing report 0.0 and simply sort to the front of their pool.
+        """
+        values = []
+        for idx in range(len(self)):
+            path = self.resolve_path(str(self.data.iloc[idx][self.audio_col]))
+            try:
+                values.append(audio_duration(path))
+            except Exception:
+                values.append(0.0)
+        return values
+
     def probe(self, n_samples: int = 16, n_text_samples: int = 256, text_transform=None) -> dict:
         """
         Samples the corpus for missing audio and vocabulary coverage before training.

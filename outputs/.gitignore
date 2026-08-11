@@ -15,6 +15,20 @@ runs/*
 checkpoints/
 exports/
 weights/
+# Downloaded third-party weights (the SpeechBrain ECAPA encoder used by the
+# diarization backend caches itself here).
+models/
+
+# The model registry is the exception, and deliberately so: its weights are
+# excluded by the *.pt rule below, but registry.json and each version's
+# metadata.json ARE tracked. They are small, and they record which model was
+# served when, with what WER - the provenance of every published export.
+# A fresh clone therefore has the history without the binaries; the registry
+# skips version directories whose weights are absent rather than pointing at
+# files that are not there.
+!registry/
+!registry/**/metadata.json
+!registry/registry.json
 *.pt
 *.pth
 *.pte

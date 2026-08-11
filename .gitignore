@@ -22,6 +22,13 @@ data/*
 !data/corpus/
 !data/info.md
 
+# Sample clips for the app and diarization demos. Generated from the corpora by
+# a throwaway script, so they are reproducible rather than precious - and they
+# are corpus audio, which is not ours to redistribute through this repository.
+# The trailing slash covers the whole directory; "demo_audio/*" would be
+# redundant.
+demo_audio/
+
 ### Project layout
 # Run artifacts are deliberately NOT tracked: a run writes per-epoch metrics,
 # predictions and a log, and at a few runs a day that buries real diffs in
@@ -35,6 +42,12 @@ data/*
 
 # ssh details
 ssh-details.txt
+
+# .env variants. The bare ".env" rule below does not cover backups or
+# per-environment copies, and those hold the same credentials.
+.env.*
+!.env.example
+!.env.template
 
 # Model weights and exported models are never committed, wherever they live.
 *.pt

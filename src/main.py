@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import torch
 from torch.utils.data import DataLoader
@@ -6,6 +7,9 @@ from torch.utils.data import DataLoader
 from src.config import PipelineConfig
 from src.data.text_transform import TextTransform
 from src.data.audio_transforms import get_train_audio_transforms, get_valid_audio_transforms
+from src.data.bucketing import LengthBucketedBatchSampler, dataset_lengths, padding_efficiency
+from src.diarization import BACKENDS as DIARIZATION_BACKENDS
+from src.diarization import DiarizedTranscriber, format_transcript
 from src.data.dataset import AkanAudioDataset, AudioCollator
 from src.data.hf_dataset import parse_dataset_spec
 from src.inference.export import EXPORT_FORMATS, export_model
@@ -13,6 +17,7 @@ from src.inference.transcribe import load_deepspeech_model, transcribe_audio
 from src.models import ARCHITECTURES, build_architecture, subsampling_factor
 from src.training.trainer import Trainer
 from src.training.evaluator import Evaluator
+from src.utils.model_registry import ModelRegistry
 from src.utils.run_logger import RunManager, load_weights, resolve_checkpoint
 
 # Beyond this many mel frames a clip dominates GPU memory at normal batch sizes.
@@ -36,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("--model-type", choices=["deepspeech", "whisper"], default="deepspeech", help="Model type to use for transcription")
     transcribe_parser.add_argument("--architecture", choices=arch_choices, default="deepspeech", help="CTC model architecture when model-type is deepspeech")
     transcribe_parser.add_argument("--model-path", default=None, help="Path to model checkpoint (.pt / .pth)")
-    transcribe_parser.add_argument("--whisper-repo", default="CiBeDL/twi_trained_whisper", help="HuggingFace repository ID for Whisper model")
+    transcribe_parser.add_argument("--whisper-repo", default=None, help="HuggingFace repository ID for the Whisper comparison baseline. No default: this project serves its own trained models from outputs/registry/")
     transcribe_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
     transcribe_parser.add_argument("--noise-reduction", action="store_true", help="Apply spectral gate noise reduction before transcription")
     transcribe_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
@@ -59,7 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--no-amp", dest="use_amp", action="store_false", default=None, help="Disable CUDA mixed precision (enabled by default on CUDA)")
     train_parser.add_argument("--grad-clip", type=float, default=None, help="Max gradient norm (default 5.0; 0 disables clipping)")
     train_parser.add_argument("--allow-no-validation", action="store_true", help="Permit a multi-epoch run with no validation set (no WER/CER will be computed)")
+    train_parser.add_argument("--no-bucket-batches", dest="bucket_batches", action="store_false", default=True, help="Disable length-bucketed batching (batches clips of similar duration together to avoid paying compute for padding)")
+    train_parser.add_argument("--limit-rows", type=int, default=None, metavar="N", help="Use at most N evenly-spaced rows from each --hf-dataset, for bounding a run against a very large corpus")
     train_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
+
+    # Diarize sub-command
+    diarize_parser = subparsers.add_parser("diarize", help="Transcribe a multi-speaker recording with speaker labels")
+    diarize_parser.add_argument("--audio", "-a", required=True, help="Path to input audio file (WAV/MP3/FLAC)")
+    diarize_parser.add_argument("--model-type", choices=["deepspeech", "whisper"], default="deepspeech", help="ASR backend used for each speaker turn")
+    diarize_parser.add_argument("--architecture", choices=arch_choices, default="deepspeech", help="CTC model architecture when model-type is deepspeech")
+    diarize_parser.add_argument("--model-path", default=None, help="Path to model checkpoint (.pt / .pth)")
+    diarize_parser.add_argument("--backend", choices=list(DIARIZATION_BACKENDS) + ["auto"], default="auto", help="Diarization backend: pyannote (best, gated), ecapa (public weights), spectral (no downloads), or auto")
+    diarize_parser.add_argument("--num-speakers", type=int, default=None, help="Number of speakers, when known. Improves the ecapa and spectral backends considerably")
+    diarize_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
+    diarize_parser.add_argument("--noise-reduction", action="store_true", help="Apply spectral gate noise reduction before transcription")
+    diarize_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
 
     # Evaluate sub-command
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate trained model WER and CER")
@@ -70,6 +89,35 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--model-path", default=None, help="Path to model checkpoint")
     eval_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
     eval_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
+
+    # Models sub-command: the versioned registry of trained exports
+    models_parser = subparsers.add_parser("models", help="List, promote or roll back versioned model exports")
+    models_sub = models_parser.add_subparsers(dest="models_command")
+
+    models_sub.add_parser("list", help="Show every published version and which one is served")
+
+    show_parser = models_sub.add_parser("show", help="Full metadata for one version")
+    show_parser.add_argument("--architecture", required=True, choices=arch_choices)
+    show_parser.add_argument("--version", default=None, help="Version id (default: the promoted one)")
+
+    publish_parser = models_sub.add_parser("publish", help="Archive a checkpoint as a new version")
+    publish_parser.add_argument("--model-path", required=True, help="Checkpoint to publish")
+    publish_parser.add_argument("--architecture", required=True, choices=arch_choices)
+    publish_parser.add_argument("--wer", type=float, default=None, help="Word error rate, used to decide promotion")
+    publish_parser.add_argument("--cer", type=float, default=None, help="Character error rate")
+    publish_parser.add_argument("--run-id-of", dest="source_run_id", default=None, help="Run that produced these weights")
+    publish_parser.add_argument("--notes", default=None, help="Free-text note stored with the version")
+    publish_parser.add_argument("--promote", action="store_true", help="Serve it regardless of whether it beats the current version")
+
+    promote_parser = models_sub.add_parser("promote", help="Make a published version the one that is served")
+    promote_parser.add_argument("--architecture", required=True, choices=arch_choices)
+    promote_parser.add_argument("--version", required=True, help="Version id, e.g. v002")
+
+    rollback_parser = models_sub.add_parser("rollback", help="Revert to the previously promoted version")
+    rollback_parser.add_argument("--architecture", required=True, choices=arch_choices)
+
+    models_parser.add_argument("--run-id", default=None, help=argparse.SUPPRESS)
+    models_parser.add_argument("--device", default=None, help=argparse.SUPPRESS)
 
     # Export sub-command
     export_parser = subparsers.add_parser("export", help="Export a trained checkpoint to a deployable model file")
@@ -82,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path):
+def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path, limit_rows=None):
     """
     Builds the dataset to train or evaluate on. One or more HuggingFace corpora
     (`repo[:split]` specs) are concatenated; otherwise a CSV-backed dataset is used.
@@ -97,7 +145,9 @@ def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path):
     if hf_datasets:
         specs = [hf_datasets] if isinstance(hf_datasets, str) else list(hf_datasets)
         from src.data.hf_dataset import combine_datasets, load_hf_datasets
-        parts = load_hf_datasets(specs, sample_rate=config.audio.sample_rate, default_split=split)
+        parts = load_hf_datasets(
+            specs, sample_rate=config.audio.sample_rate, default_split=split, limit_rows=limit_rows
+        )
         return combine_datasets(parts), [part.probe() for part in parts]
 
     if not csv_path:
@@ -239,6 +289,51 @@ def valid_transforms_for(config: PipelineConfig):
     )
 
 
+def build_train_loader(config: PipelineConfig, dataset, collate_fn, run, bucket: bool) -> DataLoader:
+    """
+    Training loader, length-bucketed unless asked otherwise.
+
+    Bucketing needs every clip's duration up front, which for a corpus with no
+    duration column means one header sweep (cached afterwards). That is worth it
+    whenever clip lengths vary: batching a 0.2s clip with a 30s one pads the
+    short one out to the long one's length and pays full compute for silence.
+    """
+    kwargs = loader_kwargs(config)
+
+    if not bucket:
+        return DataLoader(
+            dataset=dataset, batch_size=config.training.batch_size,
+            shuffle=True, collate_fn=collate_fn, **kwargs
+        )
+
+    try:
+        lengths = dataset_lengths(dataset, sample_rate=config.audio.sample_rate)
+    except TypeError as exc:
+        run.logger.warning("Falling back to shuffled batching: %s", exc)
+        return DataLoader(
+            dataset=dataset, batch_size=config.training.batch_size,
+            shuffle=True, collate_fn=collate_fn, **kwargs
+        )
+
+    sampler = LengthBucketedBatchSampler(
+        lengths, batch_size=config.training.batch_size, shuffle=True
+    )
+
+    # Report what bucketing bought, against what plain shuffling would have cost.
+    shuffled = [list(range(i, min(i + config.training.batch_size, len(lengths))))
+                for i in range(0, len(lengths), config.training.batch_size)]
+    bucketed = list(iter(sampler))
+    run.logger.info(
+        "Length-bucketed batching: %.0f%% of batched frames carry audio (%.0f%% shuffled). "
+        "Clips span %.2fs to %.2fs.",
+        100 * padding_efficiency(lengths, bucketed),
+        100 * padding_efficiency(lengths, shuffled),
+        min(lengths), max(lengths)
+    )
+
+    return DataLoader(dataset=dataset, batch_sampler=sampler, collate_fn=collate_fn, **kwargs)
+
+
 def build_model(config: PipelineConfig, n_class: int) -> torch.nn.Module:
     return build_architecture(config.model.architecture, n_class, config)
 
@@ -298,7 +393,9 @@ def run_train(args, config: PipelineConfig) -> None:
         train_transforms = train_transforms_for(config)
         valid_transforms = valid_transforms_for(config)
 
-        dataset, sources = build_dataset(config, args.hf_dataset, args.split, args.csv_path)
+        dataset, sources = build_dataset(
+            config, args.hf_dataset, args.split, args.csv_path, limit_rows=args.limit_rows
+        )
         for source in sources:
             log_corpus_report(run, source, "Train", config)
         run.logger.info("Training samples: %d | Architecture: %s", len(dataset), config.model.architecture)
@@ -306,13 +403,7 @@ def run_train(args, config: PipelineConfig) -> None:
         stride = subsampling_factor(config.model.architecture)
         train_collate = AudioCollator(text_transform, train_transforms, stride=stride)
 
-        train_loader = DataLoader(
-            dataset=dataset,
-            batch_size=config.training.batch_size,
-            shuffle=True,
-            collate_fn=train_collate,
-            **loader_kwargs(config)
-        )
+        train_loader = build_train_loader(config, dataset, train_collate, run, args.bucket_batches)
 
         val_loader = None
         val_sources = []
@@ -383,6 +474,59 @@ def run_train(args, config: PipelineConfig) -> None:
         run.finish(status="failed", summary={"error": f"{type(exc).__name__}: {exc}"})
         raise
 
+def run_diarize(args, config: PipelineConfig) -> None:
+    if getattr(args, "architecture", None):
+        config.model.architecture = args.architecture
+    if getattr(args, "device", None):
+        config.device = args.device
+
+    with RunManager(kind="diarize", config=config, run_id=args.run_id, params=vars(args)) as run:
+        run.logger.info(
+            "Diarizing %s (asr=%s, backend=%s, speakers=%s)",
+            args.audio, args.model_type, args.backend, args.num_speakers or "auto"
+        )
+        pipeline = DiarizedTranscriber(
+            model_type=args.model_type,
+            model_path=args.model_path,
+            backend=args.backend,
+            config=config,
+        )
+        run.logger.info("Pipeline: %s", pipeline.describe())
+
+        result = pipeline.transcribe(
+            args.audio,
+            num_speakers=args.num_speakers,
+            apply_noise_reduction=args.noise_reduction,
+        )
+        transcript = format_transcript(result)
+
+        run.write_json("diarization.json", result)
+        run.write_text("transcript.txt", transcript)
+        run.log_metrics(
+            {
+                "num_speakers": result["num_speakers"],
+                "utterances": len(result["utterances"]),
+                "audio_seconds": result["audio_seconds"],
+                **result["timing"],
+            },
+            stage="diarize"
+        )
+        run.finish(status="completed", summary={
+            "audio_path": args.audio,
+            "num_speakers": result["num_speakers"],
+            "utterances": len(result["utterances"]),
+            "speakers": result["speakers"],
+            "timing": result["timing"],
+        })
+
+        print("\n" + "=" * 60)
+        print(f"SPEAKER-ATTRIBUTED TRANSCRIPT ({result['num_speakers']} speakers)")
+        print("=" * 60)
+        print(transcript)
+        print("=" * 60)
+        print(f"Saved to: {run.run_dir}")
+
+
 def run_evaluate(args, config: PipelineConfig) -> None:
     if getattr(args, "architecture", None):
         config.model.architecture = args.architecture
@@ -434,6 +578,82 @@ def run_evaluate(args, config: PipelineConfig) -> None:
         print("=" * 40)
         print(f"Saved to: {run.run_dir}")
 
+def run_models(args, config: PipelineConfig) -> None:
+    """
+    Registry management. Deliberately does not open a RunManager: listing
+    versions is a read, and it should not litter outputs/runs/ with a directory
+    per invocation.
+    """
+    registry = ModelRegistry(config.paths.output_dir)
+    command = getattr(args, "models_command", None) or "list"
+
+    if command == "list":
+        rows = registry.summary()
+        if not rows:
+            print(
+                "No published model versions yet.\n"
+                "Training publishes automatically; or publish an existing checkpoint with:\n"
+                "  python -m src.main models publish --model-path <ckpt> --architecture conformer --wer 0.51"
+            )
+            return
+        print(f"{'':2} {'ARCHITECTURE':<18} {'VERSION':<8} {'WER':>7} {'CER':>7}  {'RUN':<22} PUBLISHED")
+        for row in rows:
+            marker = "->" if row["current"] else "  "
+            wer = row["metrics"].get("wer")
+            cer = row["metrics"].get("cer")
+            print(
+                f"{marker} {row['architecture']:<18} {row['version']:<8} "
+                f"{wer if wer is None else f'{wer:.4f}':>7} {cer if cer is None else f'{cer:.4f}':>7}  "
+                f"{(row['run_id'] or '-'):<22} {row['published_at'] or '-'}"
+            )
+        print("\n'->' marks the version served by the app, CLI and evaluation.")
+        return
+
+    if command == "show":
+        version = (
+            registry.get(args.architecture, args.version) if args.version
+            else registry.current(args.architecture)
+        )
+        if version is None:
+            raise SystemExit(f"No such version for {args.architecture}.")
+        print(json.dumps(version.metadata, indent=2, ensure_ascii=False))
+        mismatches = version.incompatibilities(config)
+        if mismatches:
+            print("\nWARNING - this version does not match the current audio config:")
+            for line in mismatches:
+                print(f"  - {line}")
+            print("Loading it under these settings will degrade transcription quality.")
+        return
+
+    if command == "publish":
+        published = registry.publish(
+            args.model_path,
+            architecture=args.architecture,
+            metrics={"wer": args.wer, "cer": args.cer},
+            run_id=args.source_run_id,
+            config=config,
+            vocab_size=TextTransform().vocab_size,
+            subsampling_factor=subsampling_factor(args.architecture),
+            notes=args.notes,
+            promote=True if args.promote else None,
+        )
+        current = registry.current(args.architecture)
+        served = current is not None and current.version == published.version
+        print(f"Published {published}")
+        print("Promoted to current." if served else f"Not promoted; {current} remains current.")
+        return
+
+    if command == "promote":
+        print(f"Promoted {registry.promote(args.architecture, args.version)} to current.")
+        return
+
+    if command == "rollback":
+        print(f"Rolled back: {registry.rollback(args.architecture)} is now current.")
+        return
+
+    raise SystemExit(f"Unknown models command '{command}'. Try: list, show, publish, promote, rollback.")
+
+
 def run_export(args, config: PipelineConfig) -> None:
     if getattr(args, "architecture", None):
         config.model.architecture = args.architecture
@@ -478,8 +698,10 @@ def main():
 
     handlers = {
         "transcribe": run_transcribe,
+        "diarize": run_diarize,
         "train": run_train,
         "evaluate": run_evaluate,
+        "models": run_models,
         "export": run_export,
     }
 

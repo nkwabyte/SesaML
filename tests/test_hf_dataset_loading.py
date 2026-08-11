@@ -151,3 +151,28 @@ def test_local_corpus_is_preferred_over_the_hub(tmp_path, monkeypatch):
 ])
 def test_dataset_spec_parsing(spec, expected):
     assert parse_dataset_spec(spec, "train") == expected
+
+
+def test_limit_rows_takes_an_evenly_spaced_slice():
+    """A head slice can be a single speaker; a stride spans the whole corpus."""
+    class FakeArrow(list):
+        column_names = ["audio", "sentence"]
+
+        def select(self, indices):
+            return FakeArrow(self[i] for i in indices)
+
+    rows = FakeArrow(
+        {"audio": {"bytes": wav_bytes(seconds=0.1), "path": None}, "sentence": f"row {i}"}
+        for i in range(100)
+    )
+    dataset = HuggingFaceAkanDataset(hf_dataset=rows, text_column="sentence", limit_rows=10)
+
+    assert len(dataset) == 10
+    assert "10 of 100 rows" in dataset.source
+    assert [dataset[i][2] for i in range(3)] == ["row 0", "row 10", "row 20"]
+
+
+def test_limit_rows_above_the_corpus_size_is_a_no_op():
+    rows = [{"audio": {"bytes": wav_bytes(), "path": None}, "sentence": "maakye"}]
+    dataset = HuggingFaceAkanDataset(hf_dataset=rows, text_column="sentence", limit_rows=500)
+    assert len(dataset) == 1

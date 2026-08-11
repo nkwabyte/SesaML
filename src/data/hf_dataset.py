@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, List, Optional, Sequence, Tuple
 import torch
@@ -51,7 +52,8 @@ class HuggingFaceAkanDataset(Dataset):
         text_column: Optional[str] = None,
         token: Optional[str] = None,
         allow_missing_audio: bool = False,
-        local_dir: str = DEFAULT_LOCAL_DIR
+        local_dir: str = DEFAULT_LOCAL_DIR,
+        limit_rows: Optional[int] = None
     ):
         self.dataset_name = dataset_name
         self.split = split
@@ -59,11 +61,22 @@ class HuggingFaceAkanDataset(Dataset):
         self.apply_noise_reduction = apply_noise_reduction
         self.allow_missing_audio = allow_missing_audio
         self.source = f"{dataset_name}:{split}"
+        self.limit_rows = limit_rows
 
         if hf_dataset is not None:
             self.hf_dataset = hf_dataset
         else:
             self.hf_dataset = self._load(dataset_name, split, token, local_dir)
+
+        # Taking an evenly-spaced slice rather than the first N rows: corpora are
+        # frequently grouped by speaker or session, so a head slice can be one
+        # voice while a stride spans the whole set.
+        if limit_rows and limit_rows < len(self.hf_dataset) and hasattr(self.hf_dataset, "select"):
+            step = len(self.hf_dataset) / limit_rows
+            self.hf_dataset = self.hf_dataset.select(
+                [int(i * step) for i in range(limit_rows)]
+            )
+            self.source = f"{self.source} [{limit_rows} of {int(step * limit_rows)} rows]"
 
         self.text_column = text_column or self._detect_text_column()
         self._decodes_own_audio = self._disable_audio_decoding()
@@ -161,6 +174,50 @@ class HuggingFaceAkanDataset(Dataset):
             with open(path, "rb") as handle:
                 return handle.read()
         return None
+
+    def durations(self, cache_dir: str = "data/durations") -> List[float]:
+        """
+        Per-row clip length in seconds, for length-bucketed batching.
+
+        Three sources, cheapest first: a `duration` column when the corpus ships
+        one, a cached JSON from a previous pass, or a sweep of the audio headers.
+        The sweep costs a full read of every row's bytes, so it is cached - on
+        the 59k-row health corpus it is minutes, and paying it once per corpus
+        instead of once per run is the difference between bucketing being worth
+        it and not.
+        """
+        for column in ("duration", "length", "seconds"):
+            if column in (getattr(self.hf_dataset, "column_names", []) or []):
+                return [float(v) for v in self.hf_dataset[column]]
+
+        suffix = f"__n{self.limit_rows}" if self.limit_rows else ""
+        key = f"{self.dataset_name.replace('/', '__')}__{self.split}{suffix}.json"
+        cache_path = os.path.join(cache_dir, key)
+        total = len(self)
+        if os.path.exists(cache_path):
+            with open(cache_path, encoding="utf-8") as handle:
+                cached = json.load(handle)
+            if len(cached) == total:
+                return [float(v) for v in cached]
+
+        values = []
+        for idx in range(total):
+            audio_item = self.hf_dataset[idx].get("audio", {})
+            encoded = self._audio_bytes(audio_item) if isinstance(audio_item, dict) else None
+            if encoded is not None:
+                try:
+                    values.append(audio_duration_bytes(encoded))
+                    continue
+                except Exception:
+                    pass
+            array = audio_item.get("array") if isinstance(audio_item, dict) else None
+            rate = (audio_item.get("sampling_rate") if isinstance(audio_item, dict) else None) or self.sample_rate
+            values.append(len(array) / rate if array is not None else 0.0)
+
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as handle:
+            json.dump([round(v, 4) for v in values], handle)
+        return values
 
     def describe(self) -> dict:
         """Provenance record for the run log."""
@@ -319,7 +376,8 @@ def load_hf_datasets(
     apply_noise_reduction: bool = False,
     token: Optional[str] = None,
     allow_missing_audio: bool = False,
-    local_dir: str = DEFAULT_LOCAL_DIR
+    local_dir: str = DEFAULT_LOCAL_DIR,
+    limit_rows: Optional[int] = None
 ) -> List[HuggingFaceAkanDataset]:
     """Builds one HuggingFaceAkanDataset per `repo/name:split` specification."""
     datasets = []
@@ -333,7 +391,8 @@ def load_hf_datasets(
                 apply_noise_reduction=apply_noise_reduction,
                 token=token,
                 allow_missing_audio=allow_missing_audio,
-                local_dir=local_dir
+                local_dir=local_dir,
+                limit_rows=limit_rows
             )
         )
     return datasets

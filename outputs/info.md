@@ -24,14 +24,30 @@ outputs/
 │       ├── export_manifest.json exported artifact: format, size, SHA-256
 │       └── summary.json         status, duration, headline metrics
 ├── checkpoints/<run_id>/        training weights + model_meta.json — NOT in git
-└── exports/<run_id>/            exported .pt/.pth/.pte            — NOT in git
+│                                best_model.pt (weights), last_model.pt
+│                                (weights + optimizer + schedule, ~3x larger)
+├── registry/                    versioned model exports — the served models
+│   ├── registry.json            promotion pointer and history  — tracked
+│   └── <arch>/<version>/
+│       ├── model.pt             published weights              — NOT in git
+│       └── metadata.json        WER/CER, run id, SHA-256,
+│                                training features               — tracked
+└── exports/<run_id>/            exported .pt/.pth/.pte          — NOT in git
 ```
 
 ## What is tracked
 
-Logs, metrics, configs, predictions and summaries are committed so experiments
-stay reviewable and comparable in git. Model binaries are not: `checkpoints/`
-and `exports/` are ignored, as are `*.pt`, `*.pth`, `*.pte`, `*.ckpt`, `*.bin`,
+Run artifacts are machine-generated and accumulate quickly, so `runs/` and
+`logs/` are **not** committed — a few runs a day would bury real diffs in churn.
+Use `python scripts/summarize_runs.py` to compare runs locally.
+
+The registry is the exception: `registry.json` and every version's
+`metadata.json` **are** tracked, because they record which model was served
+when and at what WER. That provenance is worth keeping in git even though the
+weights are not.
+
+Model binaries are never committed: `checkpoints/`, `exports/` and `models/`
+are ignored, as are `*.pt`, `*.pth`, `*.pte`, `*.ckpt`, `*.bin`,
 `*.safetensors`, `*.onnx` and `*.tflite` anywhere in the tree. The rules live in
 `outputs/.gitignore`.
 
@@ -54,3 +70,24 @@ less outputs/logs/train-20260809-101500.log
 import pandas as pd
 pd.read_csv("outputs/runs/train-20260809-101500/metrics.csv")
 ```
+
+## Cleaning up
+
+Training leaves three checkpoint files per run, and the resumable one is roughly
+three times the size of the weights. After a handful of iterations that is
+gigabytes of superseded runs.
+
+```bash
+python scripts/clean_outputs.py                    # dry run: what would go
+python scripts/clean_outputs.py --apply            # delete it
+python scripts/clean_outputs.py --keep run-big --apply
+python scripts/clean_outputs.py --checkpoints-only --apply
+```
+
+It never touches `registry/`, and it protects the runs that produced published
+versions — read out of the registry metadata rather than hard-coded, so
+protection follows whatever has actually been published.
+
+Run directories and logs are kept for real training runs and removed only for
+smoke tests, verification and downloads. That is deliberate: a failed run's
+weights are worthless, but its metrics are the evidence for why it failed.

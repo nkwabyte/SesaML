@@ -27,7 +27,7 @@ transcript. Optional spectral-gate noise reduction is applied before inference.
 | backend | weights |
 | --- | --- |
 | `deepspeech` | newest checkpoint in `outputs/checkpoints/`, resolved automatically |
-| `whisper` | HuggingFace repo — `$MODEL_REPO_ID`, else `CiBeDL/twi_trained_whisper` |
+| `whisper` | Optional comparison baseline — shown only when `$MODEL_REPO_ID` is set |
 
 If no checkpoint has been trained yet, the app defaults to Whisper and shows a
 warning on the DeepSpeech option — an untrained DeepSpeech model produces
@@ -48,5 +48,5 @@ run's `metrics.jsonl`, with the full text log in `outputs/logs/`. See
 ## Deployment
 
 `app.py` exposes `demo` at module level, so it works unchanged as a HuggingFace
-Space entrypoint. Set `MODEL_REPO_ID` as a Space variable and `HF_TOKEN` as a
+Space entrypoint. `MODEL_REPO_ID` is optional; set `HF_TOKEN` as a
 Space secret.
