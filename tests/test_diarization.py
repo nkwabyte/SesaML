@@ -24,7 +24,7 @@ from src.diarization import (
     resolve_overlaps,
     window_regions,
 )
-from src.diarization.backends import DiarizationError, _gated_repos
+from src.diarization.backends import DiarizationError, EcapaDiarizer, _gated_repos
 from src.diarization.turns import relabel_by_first_appearance
 
 SAMPLE_RATE = 16000
@@ -235,3 +235,22 @@ def test_format_transcript_without_timestamps():
 def test_speaker_turn_serialises_for_the_api():
     turn = SpeakerTurn("SPEAKER_00", 1.0, 3.5)
     assert turn.to_dict() == {"speaker": "SPEAKER_00", "start": 1.0, "end": 3.5, "duration": 2.5}
+
+
+# --- device selection -----------------------------------------------------
+
+@pytest.mark.parametrize("requested,expected", [
+    ("cpu", "cpu"),
+    ("cuda", "cuda"),
+    ("cuda:1", "cuda:1"),
+    ("mps", "cpu"),      # Apple Silicon: speechbrain has no branch for it
+    ("xpu", "cpu"),
+])
+def test_ecapa_narrows_the_device_to_what_speechbrain_handles(requested, expected):
+    """
+    speechbrain 1.1.0 sets device_type only for "cpu" or "cuda*". Any other
+    value leaves the attribute unset and the constructor raises AttributeError
+    several frames later - which is what the app hit on Apple Silicon, since
+    device detection returns "mps" there.
+    """
+    assert EcapaDiarizer._supported_device(requested) == expected

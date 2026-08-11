@@ -9,11 +9,11 @@ corpora, and can also serve a fine-tuned Whisper model for comparison. Every
 command writes its config, metrics, predictions and logs into `outputs/`, so
 experiments stay comparable long after the terminal scrollback is gone.
 
-**Current model:** Conformer-CTC, **WER 0.510 / CER 0.166** on a held-out split,
-trained from scratch on 12.3 hours of Akan audio in about two hours.
+**Current model:** Conformer-CTC, **WER 0.4701 / CER 0.1429** on a held-out split —
+trained from scratch on 12.3 hours of Akan audio, then fine-tuned with a warm restart.
 
 > Corpus reference — *Wɔbɛtumi akɔ dan a ɛtoa wɔn so no ne ne yɔnko…*
-> Model output — *ɔbɛtumi akɔdan a ɛtɔa wɔn nsono…*
+> Model output — *wɔbɛtumi akɔdan a ɛtoa wɔn so no ne onyankoa…*
 
 Every measured number is in [docs/results.md](docs/results.md), including a
 negative result worth reading: adding 100 hours of a 500-hour corpus made the
@@ -37,7 +37,7 @@ scripts/serve_app.sh                  # try it in a browser
 | [app/](app/info.md) | Gradio web front-end |
 | [data/](data/info.md) | checked-in corpus; downloaded audio stays untracked |
 | [outputs/](outputs/info.md) | run logs, metrics, checkpoints and the model registry |
-| [tests/](tests/info.md) | fast dependency-light test suite (133 tests) |
+| [tests/](tests/info.md) | fast dependency-light test suite (144 tests) |
 | [docs/](docs/info.md) | measured results, architecture, diarization, and roadmap |
 | `notebooks/` | exploratory analysis |
 
@@ -317,7 +317,7 @@ failed.
 scripts/run_tests.sh
 ```
 
-133 tests, fast and synthetic — no data, checkpoint or network required. Covers
+144 tests, fast and synthetic — no data, checkpoint or network required. Covers
 text encoding, model shapes, audio transforms, greedy decoding, WER/CER, corpus
 guards, ragged batches, length bucketing, speaker diarization, the model
 registry and the outputs cleaner.

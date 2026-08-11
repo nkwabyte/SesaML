@@ -2,9 +2,10 @@
   "schema": 1,
   "architectures": {
     "conformer": {
-      "current": "v001",
+      "current": "v004",
       "history": [
-        "v001"
+        "v001",
+        "v004"
       ]
     }
   }

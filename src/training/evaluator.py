@@ -3,9 +3,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from tqdm import tqdm
 
 from ..data.text_transform import TextTransform
+from ..utils.progress import progress
 from ..utils.metrics import calculate_wer, calculate_cer
 
 def greedy_decoder(output_probs: torch.Tensor, blank_label: int) -> List[List[int]]:
@@ -63,7 +63,7 @@ class Evaluator:
         all_true_texts = []
 
         with torch.no_grad():
-            for _data in tqdm(validation_loader, desc="Evaluating", unit="batch"):
+            for _data in progress(validation_loader, desc="Evaluating", unit="batch"):
                 spectrograms, labels, input_lengths, label_lengths = _data
                 spectrograms = spectrograms.to(self.device)
                 labels = labels.to(self.device)

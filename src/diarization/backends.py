@@ -320,12 +320,34 @@ class EcapaDiarizer(EmbeddingClusteringDiarizer):
                 "'spectral' backend, which needs no downloads at all."
             ) from exc
 
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # speechbrain 1.1.0's Pretrained.__init__ sets self.device_type only when
+        # the device is "cpu" or contains "cuda". Anything else - "mps" on Apple
+        # Silicon, which is what this project's device detection returns there -
+        # falls through both branches, leaving the attribute unset, and the
+        # constructor raises `AttributeError: 'EncoderClassifier' object has no
+        # attribute 'device_type'` a few frames later.
+        #
+        # The encoder therefore runs on whatever speechbrain was constructed
+        # with, and self.device follows it rather than the request. Constructing
+        # on CPU and then moving the modules elsewhere splits the two apart:
+        # speechbrain still believes it is on CPU and moves inputs there inside
+        # encode_batch, so the weights and the inputs land on different devices
+        # and the first convolution raises. ECAPA has no MPS kernels to lose,
+        # and it embeds a 30s clip in a fraction of a second on CPU.
+        self.device = self._supported_device(device)
         self.encoder = EncoderClassifier.from_hparams(
             source=ECAPA_MODEL,
             savedir=savedir,
             run_opts={"device": self.device},
         )
+
+    @staticmethod
+    def _supported_device(device: Optional[str]) -> str:
+        """Narrows a device string to the ones speechbrain actually handles."""
+        requested = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if requested == "cpu" or "cuda" in str(requested):
+            return requested
+        return "cpu"
 
     def embed(self, segments, sample_rate: int) -> torch.Tensor:
         # ECAPA is trained at 16 kHz, which is also this project's sample rate,

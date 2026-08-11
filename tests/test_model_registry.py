@@ -285,3 +285,24 @@ def test_cleanup_finds_nothing_to_dedupe_on_an_empty_registry(tmp_path):
 
     (tmp_path / "checkpoints").mkdir()
     assert duplicate_weights(tmp_path, {"anything"}) == []
+
+
+def test_published_metrics_describe_the_saved_checkpoint():
+    """
+    best_model.pt and the metrics published beside it must come from the same
+    epoch. They did not: the checkpoint was chosen by lowest validation loss
+    while the metrics were taken from the lowest-WER epoch, so the registry
+    could label one epoch's weights with another epoch's WER - and then promote
+    on that number.
+    """
+    import inspect
+    from src.training import trainer as trainer_module
+
+    source = inspect.getsource(trainer_module.Trainer)
+
+    # The checkpoint is selected on WER when validation provides one.
+    assert 'selection_metric = val_metrics["wer"]' in source
+
+    # And publishing reports the metrics captured when that checkpoint was written.
+    assert "self.best_metrics = dict(epoch_metrics)" in source
+    assert "best = self.best_metrics or" in source

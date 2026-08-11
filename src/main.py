@@ -60,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
     train_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
     train_parser.add_argument("--resume", default=None, metavar="CHECKPOINT", help="Continue training from a run's last_model.pt or best_model.pt, restoring optimizer and schedule state")
+    train_parser.add_argument("--init-weights", default=None, metavar="CHECKPOINT", help="Path to pretrained model weights (.pt or checkpoint) to initialize model parameters before training (for fine-tuning on new corpora)")
     train_parser.add_argument("--num-workers", type=int, default=None, help="DataLoader worker processes (default: one per core, capped at 8)")
     train_parser.add_argument("--no-amp", dest="use_amp", action="store_false", default=None, help="Disable CUDA mixed precision (enabled by default on CUDA)")
     train_parser.add_argument("--grad-clip", type=float, default=None, help="Max gradient norm (default 5.0; 0 disables clipping)")
@@ -448,6 +449,12 @@ def run_train(args, config: PipelineConfig) -> None:
             )
 
         model = build_model(config, text_transform.vocab_size)
+
+        if getattr(args, "init_weights", None):
+            weights_path = resolve_checkpoint(args.init_weights, config)
+            weights = load_weights(weights_path, map_location=config.device)
+            model.load_state_dict(weights)
+            run.logger.info("Initialized model weights for fine-tuning from %s", weights_path)
 
         trainer = Trainer(
             model=model,

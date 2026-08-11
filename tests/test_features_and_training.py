@@ -171,3 +171,47 @@ def test_ctc_loss_tolerates_targets_longer_than_input():
 
     assert not torch.isfinite(strict)
     assert torch.isfinite(tolerant)
+
+
+# --- progress bars must never kill a run ----------------------------------
+
+def test_training_loop_survives_a_broken_output_stream():
+    """
+    A 100-epoch run died two hours in with OSError(22) raised from tqdm's write
+    to a stdout whose reader had gone away. A progress bar is cosmetic; losing
+    one must never cost a model.
+    """
+    from src.utils.progress import progress
+
+    class BrokenStream:
+        def write(self, *args):
+            raise OSError(22, "Invalid argument")
+
+        def flush(self, *args):
+            raise OSError(22, "Invalid argument")
+
+        def isatty(self):
+            return True
+
+    total = 0
+    for value in progress(range(500), file=BrokenStream(), disable=False, mininterval=0):
+        total += value
+    assert total == sum(range(500))
+
+
+def test_progress_is_off_when_no_terminal_is_attached(monkeypatch):
+    """Detached runs (schtasks, nohup, a closed SSH session) draw no bar."""
+    from src.utils import progress as progress_module
+
+    monkeypatch.delenv("SESAML_PROGRESS", raising=False)
+    monkeypatch.setattr(progress_module.sys, "stderr", None)
+    monkeypatch.setattr(progress_module.sys, "stdout", None)
+    assert progress_module.progress_enabled() is False
+
+
+@pytest.mark.parametrize("value,expected", [("1", True), ("0", False), ("yes", True), ("off", False)])
+def test_progress_env_override(monkeypatch, value, expected):
+    from src.utils import progress as progress_module
+
+    monkeypatch.setenv("SESAML_PROGRESS", value)
+    assert progress_module.progress_enabled() is expected

@@ -50,7 +50,7 @@ SPEAKER_COLORS = (
 )
 
 DESCRIPTION = f"""
-# 🇬🇭 SesaML — Akan Speech-to-Text
+# 🇬🇭 SesaML: Akan Speech-to-Text
 
 Upload an audio clip or record from your microphone to transcribe Akan (Twi) speech.
 

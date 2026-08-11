@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 import time
 from typing import Any, Dict, Optional
 import torch
@@ -7,9 +8,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from ..config import PipelineConfig
+from ..utils.progress import progress, shutdown_loader_workers
 from ..data.text_transform import TextTransform
 from ..utils.run_logger import RunManager, save_model_meta
 from .evaluator import Evaluator
@@ -90,6 +91,8 @@ class Trainer:
         self._last_applied_lr = self.config.training.learning_rate
         # Set by _publish() when a run is archived in the model registry.
         self.published_version = None
+        # Metrics of the epoch whose weights are in best_model.pt.
+        self.best_metrics: Dict[str, Any] = {}
 
         if resume_from:
             self._load_resume_state(resume_from)
@@ -220,11 +223,10 @@ class Trainer:
         Never fatal. The weights are already on disk by this point, and losing a
         finished run to a bookkeeping error would be absurd.
         """
-        best = min(
-            (entry for entry in history if entry.get("wer") is not None),
-            key=lambda entry: entry["wer"],
-            default=history[-1] if history else {},
-        )
+        # The epoch actually saved to best_model.pt. Falling back to the
+        # best-WER row in history would label these weights with a WER they do
+        # not have, and the registry promotes on exactly that number.
+        best = self.best_metrics or (history[-1] if history else {})
         metrics = {
             "wer": best.get("wer"),
             "cer": best.get("cer"),
@@ -297,11 +299,12 @@ class Trainer:
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
         running_loss = 0.0
-        progress_bar = tqdm(
+        progress_bar = progress(
             enumerate(self.train_loader),
             total=len(self.train_loader),
             desc=f"Epoch {epoch + 1}/{self.config.training.epochs}",
-            unit="batch"
+            unit="batch",
+            disable=not (sys.stdout and sys.stdout.isatty())
         )
 
         for batch_idx, _data in progress_bar:
@@ -429,7 +432,13 @@ class Trainer:
                         name=f"predictions/epoch_{epoch + 1:03d}.json",
                         preview=2
                     )
-                    selection_metric = val_metrics["loss"]
+                    # Select on WER, not validation loss. They are correlated but
+                    # not the same epoch: on one fine-tuning run the lowest
+                    # val_loss was epoch 1 while the lowest WER was epoch 5. WER
+                    # is what the project is judged on, what the registry
+                    # promotes on, and therefore what the saved checkpoint has
+                    # to be best at.
+                    selection_metric = val_metrics["wer"]
                 else:
                     selection_metric = train_loss
 
@@ -450,6 +459,10 @@ class Trainer:
                 if selection_metric < self.best_metric:
                     self.best_metric = selection_metric
                     self.best_epoch = epoch + 1
+                    # Keep the metrics of the epoch actually written to disk, so
+                    # what the registry publishes describes the weights it
+                    # publishes rather than some other epoch's numbers.
+                    self.best_metrics = dict(epoch_metrics)
                     torch.save(self.model.state_dict(), best_path)
                     self.logger.info(
                         "New best checkpoint at epoch %d (metric=%.4f)", self.best_epoch, self.best_metric
@@ -472,6 +485,10 @@ class Trainer:
             self.logger.exception("Training failed: %s", exc)
             raise
         finally:
+            # Reap the DataLoader workers before anything else. They are
+            # persistent, so a run that raises with an iterator still alive
+            # hangs at exit holding GPU memory instead of terminating.
+            shutdown_loader_workers(self.train_loader, self.val_loader)
             self.run.write_json("history.json", history)
             self.summary = {
                 "epochs_completed": len(history),

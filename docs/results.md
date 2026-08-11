@@ -10,22 +10,22 @@ Hardware: **NVIDIA RTX 4000 SFF Ada**, 20GB, 70W cap. Windows, Python 3.11, torc
 
 | | |
 |---|---|
-| **Best model** | Conformer-CTC, 8.4M parameters |
-| **WER** | **0.510** |
-| **CER** | **0.166** |
+| **Best model** | Conformer-CTC, 8.4M parameters (`conformer/v004`) |
+| **WER** | **0.4701** |
+| **CER** | **0.1429** |
 | Training data | 12.3 hours (Lagyamfi 3.2h + ghanaopendata 9.1h) |
 | Validation | Lagyamfi test split, 259 clips, held out |
-| Training time | 80 epochs × ~88s = **~2 hours** |
+| Training time | 80 epochs from scratch (~2h), then 40 fine-tuning epochs (~37m) |
 
-From a random initialisation, on twelve hours of audio, in two hours of training. CER 0.166 means roughly **five characters in six are correct**.
+From a random initialisation, on twelve hours of audio, in two hours of training. CER 0.143 means roughly **six characters in seven are correct**.
 
 ### What it actually produces
 
 Corpus reference:
 > Wɔbɛtumi akɔ dan a ɛtoa wɔn so no ne ne yɔnko…
 
-Model output:
-> ɔbɛtumi akɔdan a ɛtɔa wɔn nsono…
+Model output (`v004`):
+> wɔbɛtumi akɔdan a ɛtoa wɔn so no ne onyankoa…
 
 Recognisably the same sentence, with spelling errors. This is exactly the error profile an n-gram language model fixes, which is why KenLM rescoring is the highest-value next step.
 
@@ -83,7 +83,7 @@ A prior 30-epoch run had reported a training loss of **exactly 0.0** and looked 
 | Windows console cp1252 | Logging a Twi `ɛ`/`ɔ` would crash the run | UTF-8 with lossy fallback |
 | `’` dropped from the vocabulary | Silently glued Twi elisions (`m’abankɛseɛ`) into one word | Fold typographic variants |
 
-Test suite: **15 → 130 tests.**
+Test suite: **15 → 144 tests.**
 
 ---
 
@@ -95,9 +95,25 @@ Every finished training run is archived in the **model registry** under `outputs
 
 | | Architecture | Version | WER | CER | Run | Training data |
 |---|---|---|---|---|---|---|
-| **→** | conformer | **v001** | **0.510** | **0.166** | `run-clean` | 12.3h (Lagyamfi + ghanaopendata), 80 epochs, bs 32, lr 8e-4 |
+| **→** | conformer | **v004** | **0.4701** | **0.1429** | `run-v2-finetune` | Fine-tuned from v001, 40 epochs, bs 32, lr 2.5e-4 |
+| | conformer | v003 | 0.5131 | 0.1593 | `run-v2-finetune` | Epoch-1 weights, mislabelled by a selection bug — see below |
+| | conformer | v002 | 0.5102 | 0.1659 | `smoke-init-test3` | 1-epoch smoke test of `--init-weights` |
+| | conformer | v001 | 0.5100 | 0.1660 | `run-clean` | 12.3h from scratch, 80 epochs, bs 32, lr 8e-4 |
 
 `→` marks the version being served. `run-big` (113h, WER 1.0) is deliberately **not** published as a serving version — see §3.
+
+**v004 is an 8% relative WER improvement over v001** (0.510 → 0.4701), from a warm restart: v001's weights reloaded with a fresh one-cycle schedule at lr 2.5e-4 over the same 12.3 hours of audio. No new data was involved.
+
+### The selection bug that produced v003
+
+Every WER and CER in the table above was **measured by a direct evaluation run**, not read from a training log — because for one release those two disagreed.
+
+`best_model.pt` was written at the epoch with the lowest **validation loss**, while `_publish()` reported the metrics of the epoch with the lowest **WER**. On `run-v2-finetune` those were epoch 1 (val_loss 0.5402) and epoch 38 (WER 0.4533). The registry therefore published epoch-1 weights labelled WER 0.4533, and — because promotion compares WER — promoted them over v001. The app briefly served a model *worse* than the one it replaced (measured 0.5131 vs 0.5100) under a better-looking number.
+
+Two consequences worth keeping in mind:
+
+- **The epoch-38 weights are gone.** They were never written to disk, because selection did not track WER. The best surviving weights are the final epoch's, at 0.4701.
+- The fix is in [`trainer.py`](../src/training/trainer.py): checkpoints are selected on WER when validation provides one, and publishing reports the metrics captured at the moment that checkpoint was written, so the label always describes the weights.
 
 ### Why promotion is separate from publishing
 
