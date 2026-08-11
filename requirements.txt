@@ -5,7 +5,25 @@
 # Core Deep Learning & Audio Processing
 torch==2.9.0
 torchaudio==2.9.0
+# torchaudio 2.9 dropped its own sox/soundfile backends: load/info/save are now
+# delegates to torchcodec, which torchaudio does not itself depend on. Without
+# this pin every audio read raises ImportError. src/utils/audio_io.py falls back
+# to soundfile, so the pipeline survives a torchcodec that will not install
+# (it needs a matching FFmpeg), but decoding is narrower without it.
+# Left as a range, not pinned: pyannote.audio requires a newer torchcodec than
+# torchaudio alone needs, and a hard pin makes the two unresolvable. Nothing
+# here depends on a specific version because src/utils/audio_io.py falls back
+# to soundfile whenever torchcodec cannot load - which it cannot without a
+# matching FFmpeg, as on the Windows training box.
+torchcodec>=0.9.0
 transformers==4.57.1
+
+# Speaker diarization. pyannote is the most accurate backend but every model it
+# pulls is gated behind a HuggingFace licence acceptance, so it cannot be the
+# only option; speechbrain's ECAPA-TDNN weights are public and back the default
+# backend. Neither changes the pinned torch. See docs/speaker_diarization.md.
+pyannote.audio==4.0.7
+speechbrain==1.1.0
 librosa==0.11.0
 soundfile==0.13.1
 scipy==1.16.2
@@ -35,7 +53,9 @@ jiwer==4.0.0
 
 # Web Application & Serving
 gradio==5.50.0
-streamlit==1.51.0
+# streamlit removed: the app is Gradio, which handles the diarization UI
+# (colour-coded turns, timeline, speaker slider) without difficulty. Keeping an
+# unused streamlit pinned it against protobuf<7, which pyannote.audio breaks.
 tornado==6.5.2
 
 # Utilities, Hardware & Audio Input
@@ -89,7 +109,9 @@ networkx==3.5
 packaging==25.0
 platformdirs==4.4.0
 pooch==1.8.2
-protobuf==6.33.0
+# protobuf: pyannote.audio's opentelemetry dependency requires >=7, which the
+# previous <7 pin (inherited from streamlit) contradicted.
+protobuf>=6.33.0
 pyarrow==21.0.0
 pycparser==2.23
 pydot==4.0.1

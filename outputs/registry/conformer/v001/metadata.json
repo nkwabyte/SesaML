@@ -1,0 +1,22 @@
+{
+  "architecture": "conformer",
+  "version": "v001",
+  "run_id": "run-clean",
+  "published_at": "2026-08-10T23:29:00",
+  "source_checkpoint": "outputs/checkpoints/run-clean/best_model.pt",
+  "size_bytes": 33760745,
+  "sha256": "79b6a01cee97d4666c385567b10a30a348d126e84355464981e0d4c1778de15e",
+  "metrics": {
+    "wer": 0.51,
+    "cer": 0.166
+  },
+  "features": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "n_fft": 400,
+    "hop_length": 160,
+    "vocab_size": 41,
+    "subsampling_factor": 4
+  },
+  "notes": "12.3h Lagyamfi+ghanaopendata, 80 epochs, bs32 lr8e-4. First working Akan model."
+}

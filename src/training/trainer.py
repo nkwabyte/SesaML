@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from typing import Any, Dict, Optional
@@ -12,6 +13,15 @@ from ..config import PipelineConfig
 from ..data.text_transform import TextTransform
 from ..utils.run_logger import RunManager, save_model_meta
 from .evaluator import Evaluator
+
+# Consecutive degenerate-loss steps tolerated before aborting. Generous enough
+# that a transient non-finite batch does not kill an otherwise healthy run.
+DEGENERATE_LOSS_PATIENCE = 100
+
+
+class DegenerateLossError(RuntimeError):
+    """Raised when the CTC loss is pinned at 0.0 or non-finite, i.e. nothing is being learned."""
+
 
 class Trainer:
     """
@@ -29,7 +39,8 @@ class Trainer:
         val_loader: Optional[DataLoader] = None,
         config: Optional[PipelineConfig] = None,
         text_transform: Optional[TextTransform] = None,
-        run: Optional[RunManager] = None
+        run: Optional[RunManager] = None,
+        resume_from: Optional[str] = None
     ):
         self.config = config or PipelineConfig()
         self.device = torch.device(self.config.device)
@@ -43,23 +54,45 @@ class Trainer:
         self._owns_run = run is None
 
         blank_idx = self.text_transform.blank_label
-        self.criterion = nn.CTCLoss(blank=blank_idx).to(self.device)
+        # zero_infinity drops the gradient of a sample whose target is longer
+        # than its subsampled input rather than poisoning the whole batch with
+        # inf. Such samples exist in every corpus (fast speech, clipped audio).
+        self.criterion = nn.CTCLoss(blank=blank_idx, zero_infinity=True).to(self.device)
 
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.training.learning_rate
         )
 
-        steps_per_epoch = max(1, len(self.train_loader))
+        # total_steps rather than steps_per_epoch/epochs: OneCycleLR's own
+        # multiplication of the two rounds in a way that lets the final anneal
+        # step overshoot into a negative learning rate on short runs.
+        self.steps_per_epoch = max(1, len(self.train_loader))
+        self.total_steps = self.steps_per_epoch * max(1, self.config.training.epochs)
         self.scheduler = optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.config.training.learning_rate,
-            steps_per_epoch=steps_per_epoch,
-            epochs=self.config.training.epochs,
+            total_steps=self.total_steps,
             anneal_strategy="linear"
         )
 
+        # Mixed precision is CUDA-only: MPS has no GradScaler and CPU autocast
+        # (bf16) is slower than fp32 for these shapes.
+        self.use_amp = bool(self.config.training.use_amp) and self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
         self.global_step = 0
+        self.start_epoch = 0
+        self.best_metric = float("inf")
+        self.best_epoch = 0
+        self.history: list = []
+        self._degenerate_steps = 0
+        self._last_applied_lr = self.config.training.learning_rate
+        # Set by _publish() when a run is archived in the model registry.
+        self.published_version = None
+
+        if resume_from:
+            self._load_resume_state(resume_from)
         # Populated by train(); read by callers that own the RunManager.
         self.status = "pending"
         self.summary: Dict[str, Any] = {}
@@ -89,6 +122,178 @@ class Trainer:
             "val_batches": len(self.val_loader) if self.val_loader else 0,
         })
 
+    def _training_state(self, epoch: int) -> Dict[str, Any]:
+        """
+        Everything needed to continue this run, not just to run the weights.
+
+        A bare state_dict cannot be resumed from: AdamW's moment estimates and
+        the one-cycle schedule's position are as much a part of training as the
+        parameters, and restarting without them re-warms the LR and throws away
+        the optimizer's accumulated curvature estimate.
+        """
+        return {
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict(),
+            "epoch": epoch,
+            "global_step": self.global_step,
+            "best_metric": self.best_metric,
+            "best_epoch": self.best_epoch,
+            "history": self.history,
+            "architecture": getattr(self.config.model, "architecture", "deepspeech"),
+            "vocab_size": self.text_transform.vocab_size,
+            "n_mels": self.config.audio.n_mels,
+            "total_steps": self.total_steps,
+        }
+
+    def _load_resume_state(self, path: str) -> None:
+        """Restores model, optimizer, schedule and bookkeeping from a resumable checkpoint."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Cannot resume: checkpoint not found at {path}")
+
+        state = torch.load(path, map_location=self.device, weights_only=False)
+        if not isinstance(state, dict) or "model" not in state:
+            raise ValueError(
+                f"{path} is a plain weights file, not a resumable checkpoint. Resume needs "
+                f"one of the 'last_model.pt' / 'best_model.pt' files written by a run that "
+                f"used this version of the trainer."
+            )
+
+        # A checkpoint trained on different features or a different vocabulary
+        # will load its tensors and then train nonsense, so refuse it outright.
+        for field, current in (
+            ("vocab_size", self.text_transform.vocab_size),
+            ("n_mels", self.config.audio.n_mels),
+            ("architecture", getattr(self.config.model, "architecture", "deepspeech")),
+        ):
+            saved = state.get(field)
+            if saved is not None and saved != current:
+                raise ValueError(
+                    f"Cannot resume {path}: it was trained with {field}={saved!r} but this "
+                    f"run is configured for {field}={current!r}."
+                )
+
+        self.model.load_state_dict(state["model"])
+        self.optimizer.load_state_dict(state["optimizer"])
+        if state.get("scaler"):
+            self.scaler.load_state_dict(state["scaler"])
+
+        # The schedule only transfers when the run length matches; otherwise the
+        # remaining epochs get a fresh one-cycle over what is left.
+        if state.get("scheduler") and state.get("total_steps") == self.total_steps:
+            self.scheduler.load_state_dict(state["scheduler"])
+        else:
+            self.logger.warning(
+                "Resume changes the total step count (%s -> %s); starting a fresh "
+                "one-cycle schedule over the remaining epochs.",
+                state.get("total_steps"), self.total_steps
+            )
+
+        self.start_epoch = int(state.get("epoch", 0)) + 1
+        self.global_step = int(state.get("global_step", 0))
+        self.best_metric = float(state.get("best_metric", float("inf")))
+        self.best_epoch = int(state.get("best_epoch", 0))
+        self.history = list(state.get("history", []))
+
+        self.logger.info(
+            "Resumed from %s at epoch %d (global_step=%d, best_metric=%s)",
+            path, self.start_epoch + 1, self.global_step,
+            None if self.best_metric == float("inf") else round(self.best_metric, 6)
+        )
+
+        if self.start_epoch >= self.config.training.epochs:
+            raise ValueError(
+                f"Cannot resume: {path} already completed {self.start_epoch} of "
+                f"{self.config.training.epochs} epochs. Raise --epochs to continue training."
+            )
+
+    def _publish(self, checkpoint: str, history: list) -> None:
+        """
+        Archives this run's best weights in the model registry.
+
+        Publishing is unconditional and promotion is not: the registry serves
+        the new version only if it beats the one already promoted. That is what
+        makes a series of training iterations safe - a run that collapses is
+        recorded for comparison but never becomes the model the demo loads.
+
+        Never fatal. The weights are already on disk by this point, and losing a
+        finished run to a bookkeeping error would be absurd.
+        """
+        best = min(
+            (entry for entry in history if entry.get("wer") is not None),
+            key=lambda entry: entry["wer"],
+            default=history[-1] if history else {},
+        )
+        metrics = {
+            "wer": best.get("wer"),
+            "cer": best.get("cer"),
+            "val_loss": best.get("val_loss"),
+            "train_loss": best.get("train_loss"),
+            "epoch": best.get("epoch"),
+            "epochs_completed": len(history),
+        }
+
+        try:
+            from ..utils.model_registry import ModelRegistry
+
+            registry = ModelRegistry(self.config.paths.output_dir)
+            architecture = getattr(self.config.model, "architecture", "deepspeech")
+            published = registry.publish(
+                checkpoint,
+                architecture=architecture,
+                metrics=metrics,
+                run_id=self.run.run_id,
+                config=self.config,
+                vocab_size=self.text_transform.vocab_size,
+                subsampling_factor=getattr(self.model, "subsampling_factor", None),
+            )
+            self.published_version = published.version
+
+            current = registry.current(architecture)
+            if current is not None and current.version == published.version:
+                self.logger.info("Published %s and promoted it to current.", published)
+            else:
+                serving = current or "nothing"
+                self.logger.warning(
+                    "Published %s but did NOT promote it: %s is better and stays current. "
+                    "Force with `python -m src.main models promote --architecture %s --version %s`.",
+                    published, serving, architecture, published.version
+                )
+        except Exception as exc:
+            self.logger.warning(
+                "Could not publish to the model registry (%s: %s). The checkpoint is "
+                "still at %s.", type(exc).__name__, exc, checkpoint
+            )
+
+    def _check_loss(self, loss: float, epoch: int, batch_idx: int, label_lengths: torch.Tensor) -> None:
+        """
+        Aborts on a loss that cannot come from real training.
+
+        A CTC loss of exactly 0.0 is only reachable with zero-length targets, and
+        NaN/inf means the targets are longer than the subsampled input. Both
+        conditions persist for the whole run once they appear, so a hundred
+        consecutive occurrences is a broken corpus, not a rough patch.
+        """
+        degenerate = loss == 0.0 or not math.isfinite(loss)
+        if not degenerate:
+            self._degenerate_steps = 0
+            return
+
+        self._degenerate_steps += 1
+        if self._degenerate_steps < DEGENERATE_LOSS_PATIENCE:
+            return
+
+        empty = int((label_lengths == 0).sum())
+        raise DegenerateLossError(
+            f"Loss has been {'non-finite' if not math.isfinite(loss) else 'exactly 0.0'} for "
+            f"{self._degenerate_steps} consecutive steps (epoch {epoch + 1}, batch {batch_idx + 1}); "
+            f"{empty} of {len(label_lengths)} targets in this batch are empty. "
+            f"A zero CTC loss means the model is being trained to emit blanks, and a "
+            f"non-finite one means the targets are longer than the subsampled input. "
+            f"Check the transcription column and the audio actually reaching the loader."
+        )
+
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
         running_loss = 0.0
@@ -104,19 +309,50 @@ class Trainer:
             spectrograms = spectrograms.to(self.device)
             labels = labels.to(self.device)
 
-            self.optimizer.zero_grad()
+            # Read the rate before stepping the schedule: this is the value the
+            # upcoming optimizer step actually uses. get_last_lr() after the step
+            # describes the *next* one, and on the final step of a one-cycle
+            # schedule that lands past the end of the anneal and reports a
+            # negative rate no step ever ran at.
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            self._last_applied_lr = current_lr
 
-            # Attention-based encoders need the valid frame counts, or they
-            # attend to padding; recurrent ones ignore the argument.
-            output = self.model(spectrograms, input_lengths)
-            output = F.log_softmax(output, dim=2)
+            self.optimizer.zero_grad(set_to_none=True)
+
+            # Every architecture needs the valid frame counts: attention encoders
+            # would otherwise attend to padding, and the recurrent one would run
+            # its backward pass over it.
+            with torch.autocast(device_type=self.device.type, enabled=self.use_amp):
+                output = self.model(spectrograms, input_lengths)
+
+            # log_softmax and CTC stay in fp32 whatever the encoder ran in - the
+            # loss sums log-probabilities over hundreds of frames, which is where
+            # fp16 underflows.
+            output = F.log_softmax(output.float(), dim=2)
             output = output.transpose(0, 1)  # Required for CTCLoss: (time, batch, class)
 
-            loss = self.criterion(output, labels, input_lengths, label_lengths)
-            loss.backward()
+            # The model may emit fewer frames than the collate function predicted
+            # when convolution arithmetic rounds the other way.
+            frames = output.size(0)
+            loss = self.criterion(output, labels, input_lengths.clamp(max=frames), label_lengths)
 
-            self.optimizer.step()
-            self.scheduler.step()
+            self.scaler.scale(loss).backward()
+
+            # Unscale before clipping, or the threshold applies to gradients
+            # still multiplied by the AMP loss scale.
+            self.scaler.unscale_(self.optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.config.training.grad_clip_norm
+            )
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            # A skipped step (inf/nan gradients under AMP) must not advance the
+            # schedule either, or the LR curve drifts out of sync with progress.
+            if not self.use_amp or torch.isfinite(grad_norm):
+                self.scheduler.step()
+
+            self._check_loss(loss.item(), epoch, batch_idx, label_lengths)
 
             running_loss += loss.item()
             self.global_step += 1
@@ -128,7 +364,10 @@ class Trainer:
                         "epoch": epoch + 1,
                         "batch": batch_idx + 1,
                         "train_loss": round(loss.item(), 6),
-                        "lr": self.scheduler.get_last_lr()[0],
+                        "lr": current_lr,
+                        # A grad_norm pinned at the clip threshold means the clip
+                        # is doing all the work and the LR is probably too high.
+                        "grad_norm": round(float(grad_norm), 4),
                     },
                     step=self.global_step,
                     stage="train_step"
@@ -154,19 +393,25 @@ class Trainer:
             text_transform=self.text_transform
         ) if self.val_loader else None
 
-        best_metric = float("inf")
-        best_epoch = 0
-        history = []
+        # Seeded from the resume checkpoint when there is one, otherwise fresh.
+        history = self.history
         self.status = "completed"
+        # Bound before the loop so the interrupt handler can always save state.
+        epoch = self.start_epoch - 1
+
+        if self.start_epoch:
+            self.logger.info(
+                "Continuing at epoch %d of %d", self.start_epoch + 1, self.config.training.epochs
+            )
 
         try:
-            for epoch in range(self.config.training.epochs):
+            for epoch in range(self.start_epoch, self.config.training.epochs):
                 epoch_start = time.time()
                 train_loss = self.train_epoch(epoch)
                 epoch_metrics: Dict[str, Any] = {
                     "epoch": epoch + 1,
                     "train_loss": round(train_loss, 6),
-                    "lr": self.scheduler.get_last_lr()[0],
+                    "lr": self._last_applied_lr,
                     "epoch_time_sec": round(time.time() - epoch_start, 2),
                 }
 
@@ -197,19 +442,31 @@ class Trainer:
                     " | ".join(f"{k}={v}" for k, v in epoch_metrics.items() if k != "epoch")
                 )
 
-                torch.save(self.model.state_dict(), last_path)
-                if selection_metric < best_metric:
-                    best_metric = selection_metric
-                    best_epoch = epoch + 1
+                # last_model.pt carries optimizer and schedule state so --resume
+                # can continue from here. best_model.pt stays weights-only: it is
+                # the artifact inference and export load, and the optimizer
+                # moments would triple its size for no reader that wants them.
+                torch.save(self._training_state(epoch), last_path)
+                if selection_metric < self.best_metric:
+                    self.best_metric = selection_metric
+                    self.best_epoch = epoch + 1
                     torch.save(self.model.state_dict(), best_path)
-                    self.logger.info("New best checkpoint at epoch %d (metric=%.4f)", best_epoch, best_metric)
+                    self.logger.info(
+                        "New best checkpoint at epoch %d (metric=%.4f)", self.best_epoch, self.best_metric
+                    )
 
+            # The published artifact stays a plain state_dict: inference and
+            # export load weights, and should not have to know about optimizers.
             torch.save(self.model.state_dict(), checkpoint_path)
             self.logger.info("Model saved successfully to %s", checkpoint_path)
+            self._publish(best_path if os.path.exists(best_path) else checkpoint_path, history)
         except KeyboardInterrupt:
             self.status = "interrupted"
-            torch.save(self.model.state_dict(), last_path)
-            self.logger.warning("Training interrupted; partial weights saved to %s", last_path)
+            torch.save(self._training_state(epoch), last_path)
+            self.logger.warning(
+                "Training interrupted; resumable state saved to %s. Continue with "
+                "--resume %s", last_path, last_path
+            )
         except BaseException as exc:
             self.status = "failed"
             self.logger.exception("Training failed: %s", exc)
@@ -218,13 +475,17 @@ class Trainer:
             self.run.write_json("history.json", history)
             self.summary = {
                 "epochs_completed": len(history),
-                "best_epoch": best_epoch,
-                "best_metric": None if best_metric == float("inf") else round(best_metric, 6),
+                "best_epoch": self.best_epoch,
+                "best_metric": None if self.best_metric == float("inf") else round(self.best_metric, 6),
                 "final_train_loss": history[-1]["train_loss"] if history else None,
                 "final_wer": history[-1].get("wer") if history else None,
                 "final_cer": history[-1].get("cer") if history else None,
                 "checkpoint_dir": str(checkpoint_dir),
                 "checkpoint": checkpoint_path,
+                "resumable_checkpoint": last_path,
+                "resumed_from_epoch": self.start_epoch or None,
+                "mixed_precision": self.use_amp,
+                "published_version": self.published_version,
             }
             # Only close the run when this Trainer created it; otherwise the
             # caller owns the lifecycle and merges `summary` into its own finish.

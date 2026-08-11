@@ -15,16 +15,53 @@ warn() { printf '\033[1;33m[sesaml]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[sesaml]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # Loads .env (HF_TOKEN, MODEL_REPO_ID, ...) without echoing secret values.
+#
+# Parsed line by line rather than sourced. `source .env` executes the file as a
+# shell script, so any stray line runs as a command - a pasted
+# `python scripts/download_all_datasets.py ...` left in .env re-downloaded every
+# corpus on each invocation of every script, before the actual work started.
+# Only KEY=VALUE assignments are honoured here, and anything else is reported
+# rather than run.
 load_env() {
-  if [[ -f "${REPO_ROOT}/.env" ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "${REPO_ROOT}/.env"
-    set +a
-    log "Loaded environment from .env"
-  else
+  local env_file="${REPO_ROOT}/.env"
+
+  if [[ ! -f "${env_file}" ]]; then
     warn "No .env found - copy env.template to .env if you need HF credentials"
+    return 0
   fi
+
+  local line key value skipped=0
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"                       # tolerate CRLF from Windows editors
+
+    if [[ -z "${line//[[:space:]]/}" ]]; then
+      continue
+    fi
+    if [[ "${line}" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[2]}"
+      value="${BASH_REMATCH[3]}"
+      # Strip one layer of matching quotes, as dotenv files conventionally allow.
+      if [[ "${value}" =~ ^\"(.*)\"$ ]] || [[ "${value}" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+      export "${key}=${value}"
+    else
+      skipped=$((skipped + 1))
+    fi
+  done < "${env_file}"
+
+  if (( skipped > 0 )); then
+    # Deliberately does not echo the line: it may carry a token.
+    warn ".env: ignored ${skipped} line(s) that are not KEY=VALUE assignments."
+    warn "      Commands in .env are no longer executed. Remove them, or move them to a script."
+  fi
+
+  log "Loaded environment from .env"
 }
 
 # Finds or installs a compatible Python interpreter (>=3.10, <3.14).

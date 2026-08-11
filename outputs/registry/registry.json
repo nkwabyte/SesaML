@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "architectures": {
+    "conformer": {
+      "current": "v001",
+      "history": [
+        "v001"
+      ]
+    }
+  }
+}

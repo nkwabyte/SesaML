@@ -61,6 +61,39 @@ def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
+def _make_stream_utf8(stream) -> None:
+    """
+    Best-effort switch of a text stream to UTF-8 with lossy fallback.
+
+    Only meaningful on Windows, where the console encoding is cp1252 and any
+    Twi transcript containing ɛ or ɔ raises on write.
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
+def load_weights(path, map_location=None) -> Dict[str, Any]:
+    """
+    Reads model weights from either checkpoint layout.
+
+    `speech_recognition_model.pt` is a plain state_dict, while `last_model.pt`
+    and `best_model.pt` wrap one alongside optimizer and schedule state so a run
+    can be resumed. Inference and export want only the weights, and should not
+    fail because they were handed the resumable file.
+    """
+    import torch
+
+    state = torch.load(str(path), map_location=map_location, weights_only=False)
+    if isinstance(state, dict) and "model" in state and isinstance(state["model"], dict):
+        return state["model"]
+    return state
+
+
 def resolve_path(path) -> Path:
     """Resolves a path relative to the project root so runs launched from any
     working directory still write into the same ``outputs/`` tree."""
@@ -182,6 +215,12 @@ class RunManager:
         logger.addHandler(file_handler)
 
         if console:
+            # Windows consoles default to cp1252, which cannot encode the Akan
+            # vowels ɛ and ɔ - logging a single real transcript would raise
+            # UnicodeEncodeError and take the training run down with it. Retarget
+            # stdout at UTF-8 where possible, and fall back to replacing the
+            # characters rather than letting a log line kill an hour of training.
+            _make_stream_utf8(sys.stdout)
             stream_handler = logging.StreamHandler(sys.stdout)
             stream_handler.setFormatter(formatter)
             logger.addHandler(stream_handler)
@@ -376,14 +415,35 @@ def latest_checkpoint(output_dir: str = "outputs") -> Optional[Path]:
 
 def resolve_checkpoint(explicit: Optional[str], config: Any) -> str:
     """
-    Picks the checkpoint to load: an explicit path wins, otherwise the newest
-    run's weights, otherwise the configured default location.
+    Picks the checkpoint to load, in descending order of trust:
+
+    1. an explicit path,
+    2. the version promoted in the model registry,
+    3. the newest run's weights,
+    4. the configured default location.
+
+    The registry comes before recency deliberately. Resolving by modification
+    time means the most recent training run is served whether or not it is any
+    good, so one collapsed run replaces a working model. A promoted version only
+    changes when a run actually beats it.
     """
     if explicit:
         return explicit
 
     paths = getattr(config, "paths", None)
-    discovered = latest_checkpoint(getattr(paths, "output_dir", "outputs"))
+    output_dir = getattr(paths, "output_dir", "outputs")
+
+    from .model_registry import ModelRegistry
+
+    architecture = getattr(getattr(config, "model", None), "architecture", None)
+    registry = ModelRegistry(str(resolve_path(output_dir)))
+    # Fall back to any architecture: a config left at its default should still
+    # find the one model that has been published.
+    promoted = registry.resolve(architecture) or registry.resolve()
+    if promoted is not None:
+        return str(promoted.path)
+
+    discovered = latest_checkpoint(output_dir)
     if discovered is not None:
         return str(discovered)
 
@@ -391,6 +451,8 @@ def resolve_checkpoint(explicit: Optional[str], config: Any) -> str:
 
 
 MODEL_META_FILENAME = "model_meta.json"
+# Written by ModelRegistry.publish; see src/utils/model_registry.py.
+REGISTRY_META_FILENAME = "metadata.json"
 
 
 def save_model_meta(checkpoint_dir: Path, meta: Dict[str, Any]) -> Path:
@@ -409,16 +471,32 @@ def save_model_meta(checkpoint_dir: Path, meta: Dict[str, Any]) -> Path:
 
 
 def load_model_meta(checkpoint_path: Any) -> Optional[Dict[str, Any]]:
-    """Reads the architecture metadata sitting beside a checkpoint, if any."""
+    """
+    Reads the architecture metadata sitting beside a checkpoint, if any.
+
+    Two layouts carry it: a training run writes ``model_meta.json``, while a
+    published registry version writes the richer ``metadata.json``. The registry
+    form nests the front-end settings under "features", so they are lifted to
+    the top level here and callers see one shape either way.
+    """
     if not checkpoint_path:
         return None
-    meta_path = Path(checkpoint_path).parent / MODEL_META_FILENAME
-    if not meta_path.is_file():
-        return None
-    try:
-        return json.loads(meta_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+
+    directory = Path(checkpoint_path).parent
+    for filename in (MODEL_META_FILENAME, REGISTRY_META_FILENAME):
+        meta_path = directory / filename
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        features = meta.pop("features", None)
+        if isinstance(features, dict):
+            for key, value in features.items():
+                meta.setdefault(key, value)
+        return meta
+    return None
 
 
 def load_run_index(output_dir: str = "outputs") -> List[Dict[str, Any]]:

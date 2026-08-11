@@ -1,18 +1,30 @@
 # SesaML
 
-Akan (Twi) automatic speech recognition — training, evaluation, export and a web
-app, with every run reproducibly logged.
+Akan (Twi) automatic speech recognition — training, evaluation, speaker
+diarization, versioned model exports and a web app, with every run reproducibly
+logged.
 
-SesaML trains a DeepSpeech2-style CTC model from scratch on Akan speech corpora,
-and can also serve a fine-tuned Whisper model for comparison. Every command
-writes its config, metrics, predictions and logs into `outputs/`, so experiments
-stay comparable long after the terminal scrollback is gone.
+SesaML trains Conformer and DeepSpeech2 CTC models from scratch on Akan speech
+corpora, and can also serve a fine-tuned Whisper model for comparison. Every
+command writes its config, metrics, predictions and logs into `outputs/`, so
+experiments stay comparable long after the terminal scrollback is gone.
+
+**Current model:** Conformer-CTC, **WER 0.510 / CER 0.166** on a held-out split,
+trained from scratch on 12.3 hours of Akan audio in about two hours.
+
+> Corpus reference — *Wɔbɛtumi akɔ dan a ɛtoa wɔn so no ne ne yɔnko…*
+> Model output — *ɔbɛtumi akɔdan a ɛtɔa wɔn nsono…*
+
+Every measured number is in [docs/results.md](docs/results.md), including a
+negative result worth reading: adding 100 hours of a 500-hour corpus made the
+model strictly worse.
 
 ```bash
 scripts/setup_env.sh                  # venv + dependencies
-scripts/download_dataset.sh           # fetch a corpus into data/
-scripts/train.sh --epochs 5           # train, logging to outputs/
+scripts/download_all_datasets.sh      # fetch the corpora into data/
+scripts/train.sh --epochs 80          # train, logging to outputs/
 scripts/evaluate.sh                   # WER / CER on held-out audio
+python -m src.main models list        # which model version is served
 scripts/serve_app.sh                  # try it in a browser
 ```
 
@@ -24,9 +36,9 @@ scripts/serve_app.sh                  # try it in a browser
 | [scripts/](scripts/info.md) | entry points for every workflow |
 | [app/](app/info.md) | Gradio web front-end |
 | [data/](data/info.md) | checked-in corpus; downloaded audio stays untracked |
-| [outputs/](outputs/info.md) | run logs, metrics and checkpoints |
-| [tests/](tests/info.md) | fast dependency-light test suite |
-| [docs/](docs/info.md) | architecture, diarization blueprint, and roadmap |
+| [outputs/](outputs/info.md) | run logs, metrics, checkpoints and the model registry |
+| [tests/](tests/info.md) | fast dependency-light test suite (133 tests) |
+| [docs/](docs/info.md) | measured results, architecture, diarization, and roadmap |
 | `notebooks/` | exploratory analysis |
 
 Each folder has its own `info.md` with the details.
@@ -51,8 +63,11 @@ That creates `.venv`, installs `requirements.txt`, seeds `.env` from
 
 ```
 HF_TOKEN=hf_...
-MODEL_REPO_ID=CiBeDL/twi_trained_whisper
 ```
+
+`MODEL_REPO_ID` is optional and empty by default — the app serves the models
+trained in this repo, from `outputs/registry/`. Set it only to add a Whisper
+baseline alongside them for comparison.
 
 ## Data
 
@@ -109,46 +124,100 @@ python -m src.main train \
   --val-dataset Lagyamfi/akan_audio_processed:test
 ```
 
-To bring in the health corpus, add it as another spec — but drop the batch size,
-because its clips are 30 s rather than ~4 s:
-
-```bash
-python -m src.main train --batch-size 2 \
-  --hf-dataset ghanaopendata/twi-speech-text-multispeaker-16k:train \
-  --hf-dataset ghananlpcommunity/twi-health-asr-gemini-500hrs:train \
-  --val-dataset Lagyamfi/akan_audio_processed:test
-```
-
 Every run probes each corpus first and logs clip duration, estimated hours and
-vocabulary coverage, warning when clips are long enough to threaten GPU memory
-or when transcripts contain characters the CTC vocabulary drops.
+vocabulary coverage, and **aborts** when a corpus has no usable audio or no
+usable transcripts rather than training on it.
 
-### Staged plan
-
-Concatenating all three is not a merge of equals — the health corpus is 95.6% of
-the audio, so it dominates the gradient and the other two act as domain and
-clean-label supplements. That is the right end state (22 h is not enough to train
-this model from scratch; 494 h is), but it is worth reaching in two steps:
-
-1. **Baseline on the two small corpora** — `scripts/train.sh`, ~22 h, `--batch-size 10`.
-   Hours per run, so pipeline bugs are cheap to find.
-2. **Add the health corpus** once the baseline is sound. Its 30 s clips force
-   `--batch-size 2` on everything, and shuffled batches then pad the short clips
-   to 2,400 frames — roughly 19% of compute lost to padding. Length-bucketed
-   batching and per-corpus validation metrics fix that and are worth adding
-   before committing to the long runs.
-
-A CSV corpus works too — `--csv-path data/corpus/verified_data.csv`, with
-`audio_path` and `text` columns.
+A CSV corpus works too — `--csv-path path/to/manifest.csv`, with an audio-path
+column and a transcription column (several spellings of each are recognised).
+There is no default corpus: a data source must be named.
 
 Each run writes per-step and per-epoch metrics, keeps `best_model.pt` and
-`last_model.pt`, and survives Ctrl-C with its partial weights and metrics intact.
+`last_model.pt`, survives Ctrl-C with its partial weights intact, and can be
+continued with `--resume outputs/checkpoints/<run_id>/last_model.pt`.
+
+### On the 500-hour health corpus
+
+The obvious plan — throw all three corpora at it, since 494 h must beat 12 h —
+**was tried and failed**. A 113-hour run (100 h of it health data) plateaued at
+WER 1.0 while the 12.3-hour run reached 0.51. Nine times the data produced a
+strictly worse model.
+
+The health corpus is 59,291 clips of *exactly* 30 s with Gemini-generated
+transcripts, and CTC cannot align ~400 characters over 750 encoder frames from a
+random initialisation. Before spending GPU time on it again: fine-tune from the
+working checkpoint rather than from scratch, and segment those 30 s clips into
+utterances. Numbers in [docs/results.md](docs/results.md), plan in
+[docs/roadmap_next_steps.md](docs/roadmap_next_steps.md).
+
+Batches are length-bucketed by default, which is what makes mixing corpora
+affordable at all: pairing a 0.04 s clip with a 30 s one pads nearly everything
+to 30 s, and measured padding efficiency goes from **20% to 97%** with bucketing
+on. Disable with `--no-bucket-batches`.
+
+## Model versions
+
+Every finished run is archived in the model registry at `outputs/registry/`, and
+the app, CLI and evaluation serve the **promoted** version — not whichever file
+is newest.
+
+```bash
+python -m src.main models list                                # what exists, what is served
+python -m src.main models rollback --architecture conformer   # back to the last good one
+python -m src.main models promote --architecture conformer --version v002
+```
+
+Publishing and promoting are separate on purpose. A run is promoted only if it
+beats the served version's WER, so a collapsed iteration is archived for
+comparison without ever reaching the demo:
+
+```
+Published conformer/v002 (WER 1.0000)
+Not promoted; conformer/v001 (WER 0.5100) remains current.
+```
+
+Rollback follows promotion history rather than version numbers, so it returns to
+the last version actually served. The app exposes the same switch as a dropdown.
+Each version also records the audio front-end it was trained on — loading 80-mel
+weights under a 128-mel config degrades silently instead of raising, so the
+registry compares and warns.
+
+`registry.json` and each version's `metadata.json` are tracked in git; the `.pt`
+weights are not.
+
+## Speaker diarization
+
+Turns a recording of several people into a speaker-attributed transcript —
+*who spoke when* joined to *what was said*.
+
+```bash
+python -m src.main diarize --audio recording.wav --backend auto --num-speakers 2
+```
+
+```
+[00:00.0 - 00:07.6] SPEAKER_00: ɔbɛtumi akɔdan a ɛtɔa wɔn nsono ne onyankon adi...
+[00:08.3 - 00:08.8] SPEAKER_01: ucirie
+[00:13.6 - 00:21.0] SPEAKER_02: awɔde asɔfodie nsafoɔ a no m ɛbeɛa na me yɛ atum afiri sooaa
+```
+
+Three backends, picked with `--backend`:
+
+| Backend | Speaker model | Needs a licence? |
+| --- | --- | --- |
+| `pyannote` | `speaker-diarization-community-1` | Yes — three gated repos |
+| `ecapa` | SpeechBrain ECAPA-TDNN | No — **default** |
+| `spectral` | MFCC statistics | No, and no downloads at all |
+
+`auto` takes the best that loads, so a missing licence downgrades the demo
+instead of ending it. Pass `--num-speakers` when the count is known; automatic
+speaker counting is the weak point of the embedding backends. Full write-up in
+[docs/speaker_diarization.md](docs/speaker_diarization.md).
 
 ## Evaluating and exporting
 
 ```bash
-scripts/evaluate.sh                            # newest checkpoint, loss/WER/CER
-scripts/evaluate.sh --model-path outputs/checkpoints/train-.../best_model.pt
+scripts/evaluate.sh                            # served model version, loss/WER/CER
+scripts/evaluate.sh --model-path outputs/registry/conformer/v001/model.pt
 scripts/export_model.sh --format torchscript   # .pt
 scripts/export_model.sh --format state_dict    # .pth
 scripts/export_model.sh --format executorch    # .pte, for on-device
@@ -167,18 +236,23 @@ scripts/serve_app.sh          # http://127.0.0.1:7860
 scripts/serve_app.sh --share  # public tunnel
 ```
 
-Upload or record a clip, pick `deepspeech` (your newest checkpoint) or `whisper`
-(a HuggingFace repo), and get a transcript. Models load once per backend and are
-cached. `app/app.py` exposes `demo` at module level, so it doubles as a
-HuggingFace Space entrypoint. See [app/info.md](app/info.md).
+Two tabs: **Transcribe** for a single block of text, and **Speaker Diarization**
+for a colour-coded, speaker-attributed transcript with a turn-taking timeline.
+
+Pick `ctc` (the promoted registry version) or `whisper` (a HuggingFace repo). The
+badge names the exact version and its WER, and a **Model version** dropdown
+switches which one is served — the live fallback if a newly promoted model
+misbehaves mid-demo. Models load once and are cached. Both `app.py` and
+`app/app.py` expose `demo` at module level, so either doubles as a HuggingFace
+Space entrypoint. See [app/info.md](app/info.md).
 
 ## The models
 
 Multiple CTC architectures share a uniform interface (`src/models/`):
 
 - `deepspeech` (default) — DeepSpeech2-style residual CNN + bidirectional GRU ([src/models/deepspeech.py](src/models/deepspeech.py)), 2× time subsampling.
-- `conformer` — Conformer-S encoder with attention, depthwise convolution and macaron feed-forwards ([src/models/conformer.py](src/models/conformer.py)), ~10M parameters, 4× time subsampling.
-- `conformer-medium` — Conformer-M encoder, ~30M parameters, 4× time subsampling.
+- `conformer` — Conformer-S encoder with attention, depthwise convolution and macaron feed-forwards ([src/models/conformer.py](src/models/conformer.py)), 8.4M parameters, 4× time subsampling. **This is the trained model: WER 0.510, CER 0.166.**
+- `conformer-medium` — Conformer-M encoder, ~27M parameters, 4× time subsampling.
 
 Pass `--architecture` to train, evaluate, or transcribe:
 
@@ -187,9 +261,9 @@ scripts/train.sh --architecture conformer
 ARCHITECTURE=conformer-medium scripts/train.sh
 ```
 
-Every checkpoint stores its `model_meta.json` in `outputs/checkpoints/<run_id>/`, so evaluation, export, and the web app auto-detect the architecture automatically.
+Every checkpoint stores its architecture metadata beside the weights, so evaluation, export and the web app detect the architecture automatically — in a run directory as `model_meta.json`, in a registry version as `metadata.json`.
 
-Inputs are 128-bin mel spectrograms at 16 kHz with SpecAugment-style frequency and time masking during training.
+Inputs are **80-band log-mel spectrograms** at 16 kHz (25 ms window, 10 ms hop), normalized per utterance, with SpecAugment applied afterwards so masks fill with the feature mean. 80 rather than 128 because 128 mel filters over a 400-point FFT leaves four of them empty.
 
 The character vocabulary is 41 symbols — `a-z`, `0-9`, apostrophe, the Akan
 characters `ɛ` and `ɔ`, space, and the CTC blank. Punctuation is dropped during
@@ -207,14 +281,35 @@ Every command opens a run directory:
 outputs/
 ├── logs/<run_id>.log        full text log
 ├── runs/<run_id>/           config, metrics.jsonl, metrics.csv, predictions,
-│                            summary.json — all tracked in git
-├── runs/index.jsonl         one summary line per run
-├── checkpoints/<run_id>/    weights        — not tracked
+│                            summary.json
+├── checkpoints/<run_id>/    weights, incl. resumable state — not tracked
+├── registry/                versioned model exports; metadata tracked,
+│                            weights not
 └── exports/<run_id>/        exported models — not tracked
 ```
 
-Logs, metrics and configs are committed so experiments are reviewable in code
-review; model binaries are not. Full contract in [outputs/info.md](outputs/info.md).
+Run artifacts are machine-generated and accumulate quickly, so they are not
+committed; use `python scripts/summarize_runs.py` to compare runs locally. The
+registry is the exception — its `registry.json` and per-version `metadata.json`
+*are* tracked, because they record which model was served when and at what WER.
+Full contract in [outputs/info.md](outputs/info.md).
+
+Training leaves three checkpoint files per run and the resumable one is ~3× the
+weights, so a few iterations is gigabytes. `scripts/clean_outputs.py` prunes what
+is no longer in use:
+
+```bash
+python scripts/clean_outputs.py            # dry run: what would go
+python scripts/clean_outputs.py --apply    # delete it
+```
+
+It never touches `registry/`, protects the runs that produced published versions
+(read from the registry, not hard-coded), and removes a run's weights only when
+they are byte-identical to a published version — so `last_model.pt`, which
+carries the optimizer state needed to resume, always survives. Run directories
+and logs are kept for real training runs and dropped only for smoke tests: a
+failed run's weights are worthless, but its metrics are the evidence for why it
+failed.
 
 ## Testing
 
@@ -222,8 +317,10 @@ review; model binaries are not. Full contract in [outputs/info.md](outputs/info.
 scripts/run_tests.sh
 ```
 
-Fast, synthetic, no data or checkpoint required. Covers text encoding, model
-shapes, audio transforms, greedy decoding and WER/CER.
+133 tests, fast and synthetic — no data, checkpoint or network required. Covers
+text encoding, model shapes, audio transforms, greedy decoding, WER/CER, corpus
+guards, ragged batches, length bucketing, speaker diarization, the model
+registry and the outputs cleaner.
 
 ## Requirements
 

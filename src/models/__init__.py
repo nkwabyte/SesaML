@@ -51,7 +51,9 @@ def build_architecture(name: str, n_class: int, config: Any) -> nn.Module:
             n_rnn_layers=model_config.n_rnn_layers,
             rnn_dim=model_config.rnn_dim,
             n_class=n_class,
-            n_feats=model_config.n_feats,
+            # Both architectures read the feature count from the audio config, so
+            # changing n_mels cannot leave one of them built for the old width.
+            n_feats=audio_config.n_mels,
             stride=model_config.stride,
             dropout=model_config.dropout,
         )

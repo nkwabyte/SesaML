@@ -45,7 +45,7 @@ class TextTransform:
 
     def text_to_int(self, text: str) -> List[int]:
         """Converts a text string to a list of integer character indices."""
-        text = text.lower()
+        text = self.normalize(text).lower()
         int_sequence = []
         for c in text:
             if c == ' ':
@@ -55,6 +55,25 @@ class TextTransform:
             if ch in self.char_map:
                 int_sequence.append(self.char_map[ch])
         return int_sequence
+
+    # Corpora typeset with smart quotes write the elision in m’abankɛseɛ with
+    # U+2019, which is not the U+0027 in the vocabulary - so the apostrophe was
+    # being dropped and two words silently glued together. Mapping the variants
+    # onto the plain form recovers them.
+    PUNCTUATION_ALIASES = {
+        "’": "'",   # right single quotation mark
+        "‘": "'",   # left single quotation mark
+        "ʼ": "'",   # modifier letter apostrophe
+        "´": "'",   # acute accent used as apostrophe
+        "–": "-",   # en dash
+        "—": "-",   # em dash
+        " ": " ",   # non-breaking space
+    }
+
+    @classmethod
+    def normalize(cls, text: str) -> str:
+        """Folds typographic variants onto the characters the vocabulary holds."""
+        return "".join(cls.PUNCTUATION_ALIASES.get(ch, ch) for ch in text)
 
     def int_to_text(self, labels: List[int]) -> str:
         """Converts a sequence of integer character indices back to string."""

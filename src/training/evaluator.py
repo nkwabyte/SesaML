@@ -8,7 +8,7 @@ from tqdm import tqdm
 from ..data.text_transform import TextTransform
 from ..utils.metrics import calculate_wer, calculate_cer
 
-def greedy_decoder(output_probs: torch.Tensor, blank_label: int = 34) -> List[List[int]]:
+def greedy_decoder(output_probs: torch.Tensor, blank_label: int) -> List[List[int]]:
     """
     Decodes output probabilities/logits to the most likely sequence of character indices.
     Collapses repeated labels and filters out CTC blank tokens.
@@ -77,7 +77,13 @@ class Evaluator:
 
                 decoded_outputs = greedy_decoder(output, blank_label=self.text_transform.blank_label)
                 predicted_texts = [self.text_transform.int_to_text(seq) for seq in decoded_outputs]
-                true_texts = [self.text_transform.int_to_text(label.tolist()) for label in labels]
+                # Slice each label to its real length before decoding. Padding is
+                # index 0, which the vocabulary maps to <SPACE>, so decoding the
+                # padded row appends a run of spaces to every short reference.
+                true_texts = [
+                    self.text_transform.int_to_text(label[:length].tolist())
+                    for label, length in zip(labels, label_lengths)
+                ]
 
                 all_predicted_texts.extend(predicted_texts)
                 all_true_texts.extend(true_texts)

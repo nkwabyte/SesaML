@@ -17,7 +17,8 @@ chmod +x scripts/*.sh      # once, after cloning
 | `evaluate.sh` | Scores a checkpoint (loss/WER/CER) and saves per-sample predictions. |
 | `transcribe.sh` | Transcribes one audio file and stores the transcript. |
 | `export_model.sh` | Exports a checkpoint to `.pt` / `.pth` / `.pte` plus a tracked manifest. |
-| `serve_app.sh` | Serves the Gradio web app from `app/app.py`. |
+| `clean_outputs.py` | Prunes `outputs/` to the artifacts still in use. Dry run by default. |
+| `serve_app.sh` | Serves the Gradio web app (transcription + speaker diarization). Reports which model version it is about to serve, and warns if none is published. |
 | `run_tests.sh` | Runs the test suite (pytest, falling back to `tests/run_all_tests.py`). |
 | `summarize_runs.py` | Prints a table of all recorded runs from `outputs/runs/index.jsonl`. |
 | `ensure_python.sh` | Checks for compatible Python (>=3.10, <3.14) on Linux/macOS; auto-installs Python 3.11 via `uv` or `apt` if missing. |
@@ -103,7 +104,7 @@ scripts/export_model.sh --architecture conformer-medium --format torchscript
 ```
 
 ### 4. Fine-Tuned Whisper (`whisper`)
-HuggingFace sequence-to-sequence Transformer model (default: `CiBeDL/twi_trained_whisper`).
+HuggingFace sequence-to-sequence Transformer model. No default - pass `--whisper-repo` or set `MODEL_REPO_ID`; otherwise the repo's own trained models are used.
 
 ```bash
 # Transcribe audio using default HuggingFace Whisper model
@@ -113,7 +114,7 @@ scripts/transcribe.sh data/sample.wav --model-type whisper
 scripts/transcribe.sh data/sample.wav --model-type whisper --whisper-repo user/akan-whisper-model
 
 # Serve Gradio web app with custom Whisper repository
-MODEL_REPO_ID="CiBeDL/twi_trained_whisper" scripts/serve_app.sh
+MODEL_REPO_ID="openai/whisper-small" scripts/serve_app.sh   # optional baseline
 ```
 
 ## Datasets
@@ -161,7 +162,7 @@ GPU memory or when transcripts contain characters the CTC vocabulary drops.
 `.env` (copied from `env.template`) is loaded automatically. Useful variables:
 
 - `HF_TOKEN` — HuggingFace access token for gated datasets/models
-- `MODEL_REPO_ID` — Whisper repository id used by the Gradio app in `app/app.py`
+- `MODEL_REPO_ID` — optional Whisper repository id. Empty by default; the app serves the trained models from `outputs/registry/`
 - `ARCHITECTURE` — Default CTC architecture (`deepspeech`, `conformer`, `conformer-medium`)
 
 Scripts also honour a few overrides so you don't have to repeat flags:
