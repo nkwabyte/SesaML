@@ -12,7 +12,7 @@ import math
 import pytest
 import torch
 
-from src.diarization import (
+from src.asr.diarization import (
     SpeakerTurn,
     build_diarizer,
     clean_turns,
@@ -24,8 +24,8 @@ from src.diarization import (
     resolve_overlaps,
     window_regions,
 )
-from src.diarization.backends import DiarizationError, EcapaDiarizer, _gated_repos
-from src.diarization.turns import relabel_by_first_appearance
+from src.asr.diarization.backends import DiarizationError, EcapaDiarizer, _gated_repos
+from src.asr.diarization.turns import relabel_by_first_appearance
 
 SAMPLE_RATE = 16000
 

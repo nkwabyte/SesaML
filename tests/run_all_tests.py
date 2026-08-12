@@ -6,11 +6,11 @@ import sys
 # Ensure root directory is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.data.text_transform import TextTransform
-from src.data.audio_transforms import get_train_audio_transforms, get_valid_audio_transforms
-from src.data.dataset import AkanAudioDataset, data_processing
-from src.models.deepspeech import SpeechRecognitionModel
-from src.training.evaluator import greedy_decoder, Evaluator
+from src.asr.data.text_transform import TextTransform
+from src.asr.data.audio_transforms import get_train_audio_transforms, get_valid_audio_transforms
+from src.asr.data.dataset import AkanAudioDataset, data_processing
+from src.asr.models.deepspeech import SpeechRecognitionModel
+from src.asr.training.evaluator import greedy_decoder, Evaluator
 from src.utils.metrics import calculate_wer, calculate_cer
 
 class TestSesaML(unittest.TestCase):
@@ -66,7 +66,7 @@ class TestSesaML(unittest.TestCase):
         self.assertEqual(output.shape[2], n_class)
 
     def test_conformer_model(self):
-        from src.models.conformer import ConformerCTC
+        from src.asr.models.conformer import ConformerCTC
         batch_size = 2
         n_mels = 80
         time_steps = 100
@@ -96,7 +96,7 @@ class TestSesaML(unittest.TestCase):
         self.assertIsInstance(decoded[0], list)
 
     def test_hf_dataset_mock(self):
-        from src.data.hf_dataset import HuggingFaceAkanDataset
+        from src.asr.data.hf_dataset import HuggingFaceAkanDataset
         mock_hf_data = [
             {"audio": {"array": [0.1, -0.2, 0.3], "sampling_rate": 16000, "path": "test.wav"}, "text": "Medaase"}
         ]

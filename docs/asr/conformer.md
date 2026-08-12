@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Conformer CTC implementation in SesaML (`src/models/conformer.py`) is a Convolution-augmented Transformer encoder paired with a Connectionist Temporal Classification (CTC) head. It leverages `torchaudio.models.Conformer` for high-accuracy streaming and offline speech recognition.
+The Conformer CTC implementation in SesaML (`src/asr/models/conformer.py`) is a Convolution-augmented Transformer encoder paired with a Connectionist Temporal Classification (CTC) head. It leverages `torchaudio.models.Conformer` for high-accuracy streaming and offline speech recognition.
 
 ## Architecture Specification
 

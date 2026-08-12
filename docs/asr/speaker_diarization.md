@@ -2,7 +2,7 @@
 
 How SesaML answers **"who spoke when"** (diarization) and joins it to **"what was said"** (ASR) to produce speaker-attributed Akan transcripts.
 
-Implemented in [`src/diarization/`](../src/diarization/). Every number in this document was measured on this repository, on real Akan audio; where something is unverified it says so.
+Implemented in [`src/asr/diarization/`](../../src/asr/diarization/). Every number in this document was measured on this repository, on real Akan audio; where something is unverified it says so.
 
 ---
 
@@ -66,7 +66,7 @@ The neural pipeline the literature reports numbers for. Handles overlapped speec
 2. `pyannote/segmentation-3.0`
 3. `pyannote/speaker-diarization-community-1` ← pyannote.audio 4.x redirects here
 
-Because the blocking repository is rarely the one you asked for, [`backends.py`](../src/diarization/backends.py) parses the 403 and names the repository the hub actually refused, following the exception chain.
+Because the blocking repository is rarely the one you asked for, [`backends.py`](../../src/asr/diarization/backends.py) parses the 403 and names the repository the hub actually refused, following the exception chain.
 
 > **API note:** pyannote.audio 3 returns an `Annotation`; version 4 returns a `DiarizeOutput` wrapper and has no `.itertracks()`. Both are handled. The `itertracks` call in the previous version of this document targets the 3.x API only.
 
@@ -82,7 +82,7 @@ MFCC mean and standard deviation as the speaker embedding (coefficient 0 dropped
 
 ## 3. Turn post-processing
 
-A diarizer's raw output is fragmented and overlapping. Feeding it straight to a CTC model produces a transcript chopped mid-word. [`turns.py`](../src/diarization/turns.py) applies four steps:
+A diarizer's raw output is fragmented and overlapping. Feeding it straight to a CTC model produces a transcript chopped mid-word. [`turns.py`](../../src/asr/diarization/turns.py) applies four steps:
 
 1. **`resolve_overlaps`** — every instant gets exactly one speaker.
    - *Partial* overlap → split at the midpoint.
@@ -95,7 +95,7 @@ A diarizer's raw output is fragmented and overlapping. Feeding it straight to a 
 
 ## 4. Voice activity detection
 
-`pyannote` brings its own neural segmentation. The other two need speech regions, from [`segmentation.py`](../src/diarization/segmentation.py): frame RMS energy in dB, gated adaptively.
+`pyannote` brings its own neural segmentation. The other two need speech regions, from [`segmentation.py`](../../src/asr/diarization/segmentation.py): frame RMS energy in dB, gated adaptively.
 
 The threshold is anchored from **both ends** of the file's own energy distribution — `max(floor + 8dB, peak − 35dB)`:
 
@@ -139,12 +139,12 @@ python -m src.main diarize --audio recording.wav --backend pyannote --num-speake
 python -m src.main diarize --audio recording.wav --backend spectral --device cpu
 ```
 
-Writes `diarization.json` and `transcript.txt` into `outputs/runs/<run_id>/`.
+Writes `diarization.json` and `transcript.txt` into `outputs/asr/runs/<run_id>/`.
 
 ### Gradio app
 
 ```bash
-scripts/serve_app.sh          # or: python app/app.py --share
+scripts/asr/serve_app.sh          # or: python app/app.py --share
 ```
 
 The **Speaker Diarization** tab gives a colour-coded transcript, a proportional turn-taking timeline, a speaker-count slider, backend selection, and the raw JSON.
@@ -152,7 +152,7 @@ The **Speaker Diarization** tab gives a colour-coded transcript, a proportional 
 ### Python
 
 ```python
-from src.diarization import DiarizedTranscriber, format_transcript
+from src.asr.diarization import DiarizedTranscriber, format_transcript
 
 pipeline = DiarizedTranscriber(model_type="deepspeech", backend="ecapa")
 result = pipeline.transcribe("recording.wav", num_speakers=2)
@@ -286,7 +286,7 @@ The original design was sound; these were the corrections found while implementi
 
 ## 11. Tests
 
-[`tests/test_diarization.py`](../tests/test_diarization.py) — 27 tests, no network or downloads (they use the `spectral` backend):
+[`tests/test_diarization.py`](../../tests/test_diarization.py) — 27 tests, no network or downloads (they use the `spectral` backend):
 
 - Turn algebra: merging, dropping, overlap resolution, containment, relabelling
 - VAD: region detection against ground truth, all-speech files, silent files

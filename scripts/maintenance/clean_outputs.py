@@ -9,7 +9,7 @@ that were abandoned, failed, or were smoke tests.
 
 What is never deleted:
 
-* **outputs/registry/** - the published model exports. This is what the app and
+* **outputs/asr/registry/** - the published model exports. This is what the app and
   CLI serve, so removing it breaks the demo.
 * **The runs that produced published versions.** Their paths are read out of the
   registry metadata rather than hard-coded, so protection follows whatever has
@@ -18,10 +18,10 @@ What is never deleted:
 
 Dry run by default. Nothing is removed without --apply.
 
-    python scripts/clean_outputs.py                    # what would go
-    python scripts/clean_outputs.py --apply            # do it
-    python scripts/clean_outputs.py --keep run-big --apply
-    python scripts/clean_outputs.py --checkpoints-only --apply
+    python scripts/maintenance/clean_outputs.py                    # what would go
+    python scripts/maintenance/clean_outputs.py --apply            # do it
+    python scripts/maintenance/clean_outputs.py --keep run-big --apply
+    python scripts/maintenance/clean_outputs.py --checkpoints-only --apply
 """
 
 import argparse
@@ -31,7 +31,7 @@ import shutil
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 # Run ids matching these are disposable regardless of anything else: they are
@@ -72,9 +72,14 @@ def protected_runs(outputs: Path) -> set:
             if version.run_id:
                 keep.add(version.run_id)
             # The source path is recorded too; its parent is the run directory.
+            # Split on both separators: a version published on the Windows GPU
+            # box records `outputs\asr\checkpoints\<run>\...`, and PurePath on POSIX
+            # treats that whole string as one filename, yielding an empty parent.
             source = version.metadata.get("source_checkpoint")
             if source:
-                keep.add(Path(source).parent.name)
+                parts = [p for p in source.replace("\\", "/").split("/") if p]
+                if len(parts) >= 2:
+                    keep.add(parts[-2])
     return keep
 
 
@@ -134,14 +139,22 @@ def duplicate_weights(outputs: Path, keep: set) -> list:
     return duplicates
 
 
-def plan(outputs: Path, keep: set, checkpoints_only: bool, dedupe: bool = True) -> list:
-    """Returns (path, size, reason) for everything that would be removed."""
+def plan(domain_root: Path, keep: set, checkpoints_only: bool, dedupe: bool = True,
+         outputs: Path = None) -> list:
+    """
+    Returns (path, size, reason) for everything that would be removed.
+
+    `domain_root` holds the per-model artifacts (outputs/asr/, later
+    outputs/translation/); `outputs` is the shared root that owns logs/ and
+    defaults to the domain root when not given.
+    """
     removals = []
+    outputs = outputs or domain_root
 
     if dedupe:
-        removals.extend(duplicate_weights(outputs, keep))
+        removals.extend(duplicate_weights(domain_root, keep))
 
-    for directory in sorted((outputs / "checkpoints").glob("*")):
+    for directory in sorted((domain_root / "checkpoints").glob("*")):
         if not directory.is_dir():
             continue
         if directory.name in keep:
@@ -151,14 +164,14 @@ def plan(outputs: Path, keep: set, checkpoints_only: bool, dedupe: bool = True) 
 
     # Exported artifacts follow the same rule as checkpoints: an export from a
     # smoke test is disposable, one from a published run is the deliverable.
-    for directory in sorted((outputs / "exports").glob("*")):
+    for directory in sorted((domain_root / "exports").glob("*")):
         if not directory.is_dir() or directory.name in keep:
             continue
         if is_disposable(directory.name):
             removals.append((directory, directory_size(directory), "smoke/verify export"))
 
     if not checkpoints_only:
-        for directory in sorted((outputs / "runs").glob("*")):
+        for directory in sorted((domain_root / "runs").glob("*")):
             if not directory.is_dir() or directory.name in keep:
                 continue
             if is_disposable(directory.name):
@@ -182,6 +195,9 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--outputs", default="outputs", help="Outputs directory to prune")
+    parser.add_argument("--domain", default="asr",
+                        help="Model domain whose artifacts to prune (asr, translation, ...). "
+                             "logs/ is shared and pruned alongside whichever domain is given.")
     parser.add_argument("--apply", action="store_true", help="Actually delete; otherwise dry run")
     parser.add_argument("--keep", action="append", default=[], metavar="RUN_ID",
                         help="Protect a run id in addition to the published ones. Repeatable.")
@@ -196,11 +212,16 @@ def main() -> int:
         print(f"No outputs directory at {outputs}")
         return 1
 
-    keep = set(args.keep) | protected_runs(outputs)
-    removals = plan(outputs, keep, args.checkpoints_only, dedupe=args.dedupe)
+    domain_root = outputs / args.domain
+    if not domain_root.is_dir():
+        print(f"No '{args.domain}' artifacts at {domain_root}")
+        return 1
+
+    keep = set(args.keep) | protected_runs(domain_root)
+    removals = plan(domain_root, keep, args.checkpoints_only, dedupe=args.dedupe, outputs=outputs)
 
     print(f"Protected run ids: {', '.join(sorted(keep)) or 'none'}")
-    print("Never touched:     outputs/registry/ (the served model exports)\n")
+    print(f"Never touched:     {domain_root.name}/registry/ (the served model exports)\n")
 
     if not removals:
         print("Nothing to clean.")
@@ -224,8 +245,7 @@ def main() -> int:
             path.unlink(missing_ok=True)
 
     # Keep the directory skeleton so the pipeline has somewhere to write.
-    for name in ("runs", "logs", "checkpoints", "exports"):
-        directory = outputs / name
+    for directory in [outputs / "logs"] + [domain_root / n for n in ("runs", "checkpoints", "exports")]:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / ".gitkeep").touch(exist_ok=True)
 

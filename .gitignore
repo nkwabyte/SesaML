@@ -21,6 +21,11 @@
 data/*
 !data/corpus/
 !data/info.md
+# The generated English translation worklist: 3MB of text derived from files
+# already in the repository, reproducible with
+# scripts/build_translation_worklist.py. The *filled-in* Asante translations are
+# worth committing - remove this rule once the twi column is populated.
+data/corpus/english/to_translate.txt
 
 # Sample clips for the app and diarization demos. Generated from the corpora by
 # a throwaway script, so they are reproducible rather than precious - and they
@@ -1275,5 +1280,13 @@ GEMINI.md
 CLAUDE.md
 .gemini/
 .claude/
+.agents/
+.agent/
+.github/hooks/
+.github/runs/
+.github/skills/
+.github/skill/
+.github/functions/
+
 
 

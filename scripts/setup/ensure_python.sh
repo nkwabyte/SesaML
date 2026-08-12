@@ -3,8 +3,8 @@
 # If none is found, installs Python 3.11 automatically using uv or apt.
 #
 # Usage:
-#   scripts/ensure_python.sh
-#   PYTHON_BIN=$(scripts/ensure_python.sh)
+#   scripts/setup/ensure_python.sh
+#   PYTHON_BIN=$(scripts/setup/ensure_python.sh)
 
 set -euo pipefail
 

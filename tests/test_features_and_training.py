@@ -13,11 +13,11 @@ import torch
 import torch.nn as nn
 
 from src.config import PipelineConfig
-from src.data.audio_transforms import LogMelNormalize
-from src.data.text_transform import TextTransform
+from src.asr.data.audio_transforms import LogMelNormalize
+from src.asr.data.text_transform import TextTransform
 from src.main import train_transforms_for, valid_transforms_for
-from src.models import build_architecture
-from src.models.deepspeech import BidirectionalGRU, SpeechRecognitionModel
+from src.asr.models import build_architecture
+from src.asr.models.deepspeech import BidirectionalGRU, SpeechRecognitionModel
 
 
 def test_mel_filters_are_all_populated():

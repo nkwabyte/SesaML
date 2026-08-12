@@ -5,11 +5,15 @@ under ``outputs/`` so logs, metrics and predictions stay reproducible and
 comparable across runs:
 
     outputs/
-    ├── logs/<run_id>.log          full text log of the run
-    ├── runs/<run_id>/             config, metrics and predictions (tracked)
-    ├── runs/index.jsonl           one summary line per completed run
-    ├── checkpoints/<run_id>/      training weights (NOT tracked)
-    └── exports/<run_id>/          exported .pt/.pte/.pth models (NOT tracked)
+    ├── logs/<run_id>.log              full text log of the run (shared)
+    └── <domain>/                      "asr", "translation", ...
+        ├── runs/<run_id>/             config, metrics and predictions (tracked)
+        ├── runs/index.jsonl           one summary line per completed run
+        ├── checkpoints/<run_id>/      training weights (NOT tracked)
+        └── exports/<run_id>/          exported .pt/.pte/.pth models (NOT tracked)
+
+Artifacts are grouped by model domain so that the translation model of phase two
+cannot overwrite an ASR checkpoint or registry version of the same name.
 """
 
 import csv
@@ -176,12 +180,21 @@ class RunManager:
         self.started_at = datetime.now()
         self.run_id = run_id or f"{kind}-{self.started_at.strftime(RUN_ID_FORMAT)}"
 
-        base = output_dir or getattr(getattr(config, "paths", None), "output_dir", "outputs")
-        self.output_dir = resolve_path(base)
-        self.run_dir = self.output_dir / "runs" / self.run_id
+        # An explicit output_dir overrides both roots, which keeps callers that
+        # hand over a scratch directory (tests, ad-hoc tooling) self-contained.
+        paths = getattr(config, "paths", None)
+        if output_dir is not None:
+            root = domain = output_dir
+        else:
+            root = getattr(paths, "output_dir", "outputs")
+            domain = getattr(paths, "domain_dir", None) or root
+
+        self.output_dir = resolve_path(root)
+        self.domain_dir = resolve_path(domain)
+        self.run_dir = self.domain_dir / "runs" / self.run_id
         self.logs_dir = self.output_dir / "logs"
-        self.checkpoint_dir = self.output_dir / "checkpoints" / self.run_id
-        self.export_dir = self.output_dir / "exports" / self.run_id
+        self.checkpoint_dir = self.domain_dir / "checkpoints" / self.run_id
+        self.export_dir = self.domain_dir / "exports" / self.run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -189,7 +202,7 @@ class RunManager:
         self.metrics_path = self.run_dir / "metrics.jsonl"
         self.metrics_csv_path = self.run_dir / "metrics.csv"
         self.summary_path = self.run_dir / "summary.json"
-        self.index_path = self.output_dir / "runs" / "index.jsonl"
+        self.index_path = self.domain_dir / "runs" / "index.jsonl"
 
         self._metric_fields: List[str] = []
         self._metric_rows: List[Dict[str, Any]] = []
@@ -338,7 +351,7 @@ class RunManager:
     # ----------------------------------------------------------------- finish
 
     def finish(self, status: str = "completed", summary: Optional[Dict[str, Any]] = None) -> Path:
-        """Writes ``summary.json`` and appends the run to ``outputs/runs/index.jsonl``."""
+        """Writes ``summary.json`` and appends the run to ``outputs/asr/runs/index.jsonl``."""
         if self._finished:
             return self.summary_path
 
@@ -385,11 +398,11 @@ class RunManager:
 CHECKPOINT_PREFERENCE = ("best_model.pt", "speech_recognition_model.pt", "last_model.pt")
 
 
-def latest_checkpoint(output_dir: str = "outputs") -> Optional[Path]:
+def latest_checkpoint(output_dir: str = "outputs/asr") -> Optional[Path]:
     """
     Newest checkpoint written by a training run, i.e. the most recent
-    ``outputs/checkpoints/<run_id>/`` directory, preferring ``best_model.pt``.
-    Falls back to loose files placed directly in ``outputs/checkpoints/``.
+    ``outputs/asr/checkpoints/<run_id>/`` directory, preferring ``best_model.pt``.
+    Falls back to loose files placed directly in ``outputs/asr/checkpoints/``.
     Returns None when nothing has been trained yet.
     """
     checkpoints_root = resolve_path(output_dir) / "checkpoints"
@@ -431,23 +444,25 @@ def resolve_checkpoint(explicit: Optional[str], config: Any) -> str:
         return explicit
 
     paths = getattr(config, "paths", None)
-    output_dir = getattr(paths, "output_dir", "outputs")
+    # Checkpoints and the registry are per-domain; a translation run must not
+    # resolve an ASR checkpoint just because it was written more recently.
+    domain_dir = getattr(paths, "domain_dir", None) or getattr(paths, "output_dir", "outputs")
 
     from .model_registry import ModelRegistry
 
     architecture = getattr(getattr(config, "model", None), "architecture", None)
-    registry = ModelRegistry(str(resolve_path(output_dir)))
+    registry = ModelRegistry(str(resolve_path(domain_dir)))
     # Fall back to any architecture: a config left at its default should still
     # find the one model that has been published.
     promoted = registry.resolve(architecture) or registry.resolve()
     if promoted is not None:
         return str(promoted.path)
 
-    discovered = latest_checkpoint(output_dir)
+    discovered = latest_checkpoint(domain_dir)
     if discovered is not None:
         return str(discovered)
 
-    return str(resolve_path(getattr(paths, "models_dir", "outputs/checkpoints")) / config.training.model_name)
+    return str(resolve_path(getattr(paths, "models_dir", "outputs/asr/checkpoints")) / config.training.model_name)
 
 
 MODEL_META_FILENAME = "model_meta.json"
@@ -499,8 +514,8 @@ def load_model_meta(checkpoint_path: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def load_run_index(output_dir: str = "outputs") -> List[Dict[str, Any]]:
-    """Reads every recorded run summary from ``outputs/runs/index.jsonl``."""
+def load_run_index(output_dir: str = "outputs/asr") -> List[Dict[str, Any]]:
+    """Reads every recorded run summary from ``outputs/asr/runs/index.jsonl``."""
     index_path = resolve_path(output_dir) / "runs" / "index.jsonl"
     if not index_path.exists():
         return []

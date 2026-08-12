@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Whisper integration in SesaML (`src/models/whisper_model.py`) wraps OpenAI's Whisper encoder-decoder Transformer models via HuggingFace `transformers`. It allows fine-tuning and inference on pre-trained multilingual Whisper checkpoints (such as `openai/whisper-small`).
+The Whisper integration in SesaML (`src/asr/models/whisper_model.py`) wraps OpenAI's Whisper encoder-decoder Transformer models via HuggingFace `transformers`. It allows fine-tuning and inference on pre-trained multilingual Whisper checkpoints (such as `openai/whisper-small`).
 
 ## Architecture Specification
 

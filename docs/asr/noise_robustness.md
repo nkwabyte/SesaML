@@ -27,7 +27,7 @@ Training the model exclusively on clean studio audio causes severe performance d
                      └──────────────────────────────┘
 ```
 
-### Proposed Training Augmentation (`src/data/audio_transforms.py`)
+### Proposed Training Augmentation (`src/asr/data/audio_transforms.py`)
 
 ```python
 import torch

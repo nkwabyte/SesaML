@@ -2,31 +2,56 @@
 
 The SesaML pipeline: audio in, Akan text out.
 
+Speech recognition lives under `asr/`. Everything outside it is shared, and the
+translation model of phase two becomes `src/translation/` — a sibling of `asr/`,
+not something threaded through it.
+
 ```
 src/
 ├── config.py            all tunables — audio, model, training, paths, device auto-detection
-├── main.py              CLI: train / evaluate / transcribe / export
-├── data/
-│   ├── text_transform.py   char ↔ int mapping for CTC (a-z, 0-9, ɛ, ɔ, ', space)
-│   ├── audio_transforms.py MelSpectrogram, SpecAugment masking
-│   ├── dataset.py          CSV-backed dataset + collate function
-│   └── hf_dataset.py       HuggingFace corpora, multi-corpus concatenation
-├── models/
-│   ├── __init__.py         architecture registry (build_architecture, subsampling_factor)
-│   ├── conformer.py        Conformer-CTC encoder (attention + depthwise conv)
-│   ├── deepspeech.py       DeepSpeech2-style CNN + BiGRU CTC model
-│   └── whisper_model.py    wrapper around a fine-tuned HF Whisper
-├── training/
-│   ├── trainer.py          training loop, length-aware forwarding, checkpointing, metric logging
-│   └── evaluator.py        CTC loss, length-aware forwarding, greedy decoding, WER/CER
-├── inference/
-│   ├── transcribe.py       Transcriber (cached) + transcribe_audio (auto-detects architecture)
-│   └── export.py           TorchScript / state dict / ExecuTorch export
-└── utils/
-    ├── metrics.py          WER/CER (jiwer, with a pure-Python fallback)
-    ├── noise_reduction.py  optional spectral gate pre-processing
-    └── run_logger.py       RunManager — outputs/ contract, save_model_meta, load_model_meta
+├── main.py              CLI: train / evaluate / transcribe / export / diarize / models
+├── utils/                                                        SHARED
+│   ├── metrics.py          WER/CER (jiwer, with a pure-Python fallback)
+│   ├── model_registry.py   versioned exports: publish, promote, rollback, resolve
+│   ├── run_logger.py       RunManager — outputs/ contract, save_model_meta, load_model_meta
+│   ├── progress.py         tqdm wrapper that a dead stdout cannot kill
+│   ├── audio_io.py         soundfile-backed decoding (never torchaudio.load)
+│   └── noise_reduction.py  optional spectral gate pre-processing
+└── asr/                                                          SPEECH RECOGNITION
+    ├── data/
+    │   ├── text_transform.py   char ↔ int mapping for CTC (a-z, 0-9, ɛ, ɔ, ', space)
+    │   ├── audio_transforms.py log-mel → per-utterance CMVN → SpecAugment
+    │   ├── dataset.py          CSV-backed dataset + collate function
+    │   ├── hf_dataset.py       HuggingFace corpora, multi-corpus concatenation
+    │   ├── bucketing.py        length-bucketed batching (20% → 97% padding efficiency)
+    │   ├── feasibility.py      which samples CTC can align at all
+    │   ├── alignment.py        CTC forced alignment (own Viterbi)
+    │   └── segmenting.py       cuts long clips at aligned pauses, on word boundaries
+    ├── models/
+    │   ├── __init__.py         architecture registry (build_architecture, subsampling_factor)
+    │   ├── conformer.py        Conformer-CTC encoder (attention + depthwise conv)
+    │   ├── deepspeech.py       DeepSpeech2-style CNN + BiGRU CTC model
+    │   └── whisper_model.py    wrapper around a fine-tuned HF Whisper
+    ├── decoding/
+    │   ├── language_model.py   character n-gram, stupid backoff
+    │   ├── beam_search.py      CTC prefix beam search with LM shallow fusion
+    │   └── decoder.py          build_decoder — inference and evaluation decode identically
+    ├── training/
+    │   ├── trainer.py          training loop, length-aware forwarding, checkpointing, publishing
+    │   └── evaluator.py        CTC loss, length-aware forwarding, greedy decoding, WER/CER
+    ├── inference/
+    │   ├── transcribe.py       Transcriber (cached) + transcribe_audio (auto-detects architecture)
+    │   └── export.py           TorchScript / state dict / ExecuTorch export
+    └── diarization/
+        ├── turns.py            turn algebra (overlap resolution, merge, drop-short)
+        ├── segmentation.py     energy VAD
+        ├── backends.py         pyannote / ECAPA / spectral
+        └── pipeline.py         DiarizedTranscriber
 ```
+
+Imports inside `asr/` that reach the shared layer need three dots
+(`from ...config import`, `from ...utils.audio_io import`); those staying within
+`asr/` keep two (`from ..models import`).
 
 ## Entry point
 
@@ -70,7 +95,7 @@ present, rather than yielding empty labels that would silently poison CTC
 training.
 
 **Checkpoints resolve automatically.** `resolve_checkpoint()` picks the newest
-`outputs/checkpoints/<run_id>/best_model.pt` unless you pass an explicit path.
+`outputs/asr/checkpoints/<run_id>/best_model.pt` unless you pass an explicit path.
 
 **Two ways to transcribe.** `transcribe_audio()` loads weights per call — fine
 for the CLI. `Transcriber` holds a loaded model; use it for anything that

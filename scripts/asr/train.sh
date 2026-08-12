@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Starts a DeepSpeech CTC training run.
 #
-# Logs, per-epoch metrics and predictions are written to outputs/runs/<run_id>/,
-# weights to outputs/checkpoints/<run_id>/ (git-ignored).
+# Logs, per-epoch metrics and predictions are written to outputs/asr/runs/<run_id>/,
+# weights to outputs/asr/checkpoints/<run_id>/ (git-ignored).
 #
 # Usage:
-#   scripts/train.sh                                    # both Akan corpora combined
-#   scripts/train.sh --epochs 30 --batch-size 16
-#   scripts/train.sh --csv-path data/manifest.csv       # audio-path + transcription columns
-#   scripts/train.sh --hf-dataset ghanaopendata/twi-speech-text-multispeaker-16k
-#   scripts/train.sh --resume outputs/checkpoints/<run_id>/last_model.pt --epochs 40
+#   scripts/asr/train.sh                                    # both Akan corpora combined
+#   scripts/asr/train.sh --epochs 30 --batch-size 16
+#   scripts/asr/train.sh --csv-path data/manifest.csv       # audio-path + transcription columns
+#   scripts/asr/train.sh --hf-dataset ghanaopendata/twi-speech-text-multispeaker-16k
+#   scripts/asr/train.sh --resume outputs/asr/checkpoints/<run_id>/last_model.pt --epochs 40
 #
 # There is no default corpus inside `python -m src.main train`: it used to fall
 # back to data/corpus/verified_data.csv, which is a text-only translation table
@@ -24,7 +24,7 @@
 # LEARNING_RATE, NUM_WORKERS, RESUME.
 # Any extra flags are forwarded to `python -m src.main train`.
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 bootstrap
 
 ARCHITECTURE="${ARCHITECTURE:-deepspeech}"

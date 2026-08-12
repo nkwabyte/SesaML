@@ -7,9 +7,9 @@ The audio itself stays in `data/` (git-ignored); only the manifest, row counts
 and column schema are written to the run directory so downloads stay auditable.
 
 Examples:
-    python scripts/download_dataset.py
-    python scripts/download_dataset.py --split train --num-samples 100
-    python scripts/download_dataset.py --dataset some/other-corpus --no-save-to-disk
+    python scripts/datasets/download_dataset.py
+    python scripts/datasets/download_dataset.py --split train --num-samples 100
+    python scripts/datasets/download_dataset.py --dataset some/other-corpus --no-save-to-disk
 """
 
 import argparse
@@ -17,10 +17,10 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.config import PipelineConfig
-from src.data.hf_dataset import TEXT_COLUMNS
+from src.asr.data.hf_dataset import TEXT_COLUMNS
 from src.utils.run_logger import RunManager, resolve_path
 
 DEFAULT_DATASET = "ghanaopendata/twi-speech-text-multispeaker-16k"

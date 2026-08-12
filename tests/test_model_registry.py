@@ -248,7 +248,7 @@ def test_architectures_are_isolated_from_each_other(registry, weights):
 def test_cleanup_protects_runs_that_produced_published_versions(registry, weights, tmp_path):
     """Protection is derived from the registry, so it follows what is published."""
     import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "maintenance"))
     from clean_outputs import protected_runs
 
     registry.publish(weights, architecture="conformer", run_id="run-clean")
@@ -262,7 +262,7 @@ def test_cleanup_dedupes_only_byte_identical_weights(registry, weights, tmp_path
     ability to resume a run.
     """
     import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "maintenance"))
     from clean_outputs import duplicate_weights
 
     outputs = registry.root.parent
@@ -280,7 +280,7 @@ def test_cleanup_dedupes_only_byte_identical_weights(registry, weights, tmp_path
 
 def test_cleanup_finds_nothing_to_dedupe_on_an_empty_registry(tmp_path):
     import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "maintenance"))
     from clean_outputs import duplicate_weights
 
     (tmp_path / "checkpoints").mkdir()
@@ -296,7 +296,7 @@ def test_published_metrics_describe_the_saved_checkpoint():
     on that number.
     """
     import inspect
-    from src.training import trainer as trainer_module
+    from src.asr.training import trainer as trainer_module
 
     source = inspect.getsource(trainer_module.Trainer)
 

@@ -9,10 +9,10 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from ..config import PipelineConfig
-from ..utils.progress import progress, shutdown_loader_workers
+from ...config import PipelineConfig
+from ...utils.progress import progress, shutdown_loader_workers
 from ..data.text_transform import TextTransform
-from ..utils.run_logger import RunManager, save_model_meta
+from ...utils.run_logger import RunManager, save_model_meta
 from .evaluator import Evaluator
 
 # Consecutive degenerate-loss steps tolerated before aborting. Generous enough
@@ -29,8 +29,8 @@ class Trainer:
     Manages the training loop for the Akan DeepSpeech2 CTC model.
 
     Every run writes its logs, per-epoch metrics and summary into
-    `outputs/runs/<run_id>/`, while checkpoints go to
-    `outputs/checkpoints/<run_id>/` (kept out of version control).
+    `outputs/asr/runs/<run_id>/`, while checkpoints go to
+    `outputs/asr/checkpoints/<run_id>/` (kept out of version control).
     """
 
     def __init__(
@@ -237,9 +237,9 @@ class Trainer:
         }
 
         try:
-            from ..utils.model_registry import ModelRegistry
+            from ...utils.model_registry import ModelRegistry
 
-            registry = ModelRegistry(self.config.paths.output_dir)
+            registry = ModelRegistry(self.config.paths.domain_dir)
             architecture = getattr(self.config.model, "architecture", "deepspeech")
             published = registry.publish(
                 checkpoint,

@@ -6,8 +6,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 
 from .text_transform import TextTransform
-from ..utils.audio_io import audio_duration, load_audio
-from ..utils.noise_reduction import reduce_audio_noise
+from ...utils.audio_io import audio_duration, load_audio
+from ...utils.noise_reduction import reduce_audio_noise
 
 # CSV corpora disagree on their column names the same way HuggingFace ones do.
 # Accepting the common spellings avoids forcing every corpus through a rename.
@@ -109,6 +109,10 @@ class AkanAudioDataset(Dataset):
         if self.audio_dir and not os.path.isabs(audio_path):
             return os.path.join(self.audio_dir, audio_path)
         return audio_path
+
+    def texts(self) -> List[str]:
+        """Every transcript, for the CTC feasibility check."""
+        return [str(v) for v in self.data[self.text_col].tolist()]
 
     def durations(self) -> List[float]:
         """

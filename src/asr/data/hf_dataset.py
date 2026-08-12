@@ -5,8 +5,8 @@ import torch
 from torch.utils.data import ConcatDataset, Dataset
 import torchaudio
 
-from ..utils.audio_io import audio_duration_bytes, load_audio_bytes
-from ..utils.noise_reduction import reduce_audio_noise
+from ...utils.audio_io import audio_duration_bytes, load_audio_bytes
+from ...utils.noise_reduction import reduce_audio_noise
 from .dataset import MissingAudioError
 
 # Corpora disagree on what they call the transcription column:
@@ -16,7 +16,7 @@ TEXT_COLUMNS = ("text", "sentence", "transcription", "transcript")
 
 DEFAULT_SPLIT = "train"
 
-# Where scripts/download_dataset.py writes its save_to_disk copies.
+# Where scripts/datasets/download_dataset.py writes its save_to_disk copies.
 DEFAULT_LOCAL_DIR = os.path.join("data", "datasets")
 
 
@@ -84,7 +84,7 @@ class HuggingFaceAkanDataset(Dataset):
     @staticmethod
     def local_path(dataset_name: str, split: str, local_dir: str = DEFAULT_LOCAL_DIR) -> str:
         """
-        Where `scripts/download_dataset.py` parked this corpus.
+        Where `scripts/datasets/download_dataset.py` parked this corpus.
 
         It saves to `<local_dir>/<repo__name>/<split>`, replacing the repository
         separator, so training can find a corpus that is already on disk.
@@ -174,6 +174,21 @@ class HuggingFaceAkanDataset(Dataset):
             with open(path, "rb") as handle:
                 return handle.read()
         return None
+
+    def texts(self) -> List[str]:
+        """
+        Every transcript, without decoding any audio.
+
+        Reading a row decodes the whole row, so the audio column is dropped
+        first - the same trick probe() uses. Needed to work out which samples
+        CTC can align, which depends only on text length and clip duration.
+        """
+        try:
+            drop = [c for c in self.hf_dataset.column_names if c != self.text_column]
+            source = self.hf_dataset.remove_columns(drop) if drop else self.hf_dataset
+            return [str(row[self.text_column] or "") for row in source]
+        except Exception:
+            return [str(self.hf_dataset[i].get(self.text_column, "")) for i in range(len(self))]
 
     def durations(self, cache_dir: str = "data/durations") -> List[float]:
         """

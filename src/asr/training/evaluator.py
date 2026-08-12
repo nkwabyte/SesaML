@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..data.text_transform import TextTransform
-from ..utils.progress import progress
-from ..utils.metrics import calculate_wer, calculate_cer
+from ...utils.progress import progress
+from ...utils.metrics import calculate_wer, calculate_cer
 
 def greedy_decoder(output_probs: torch.Tensor, blank_label: int) -> List[List[int]]:
     """
@@ -39,11 +39,17 @@ def greedy_decoder(output_probs: torch.Tensor, blank_label: int) -> List[List[in
 class Evaluator:
     """Evaluates ASR model performance on validation/test datasets computing CTCLoss, WER, and CER."""
 
-    def __init__(self, model: nn.Module, criterion: nn.Module, device: str, text_transform: TextTransform):
+    def __init__(self, model: nn.Module, criterion: nn.Module, device: str,
+                 text_transform: TextTransform, decoder=None):
         self.model = model
         self.criterion = criterion
         self.device = torch.device(device)
         self.text_transform = text_transform
+        # The decoder the reported WER is measured through. Defaults to greedy
+        # so training stays fast: beam search is ~250x slower per utterance, and
+        # per-epoch validation runs it on every clip. Evaluation passes the
+        # configured decoder so the published number describes what is served.
+        self.decoder = decoder
 
     def evaluate(
         self,
@@ -75,8 +81,14 @@ class Evaluator:
                 loss = self.criterion(output, labels, input_lengths, label_lengths)
                 total_loss += loss.item()
 
-                decoded_outputs = greedy_decoder(output, blank_label=self.text_transform.blank_label)
-                predicted_texts = [self.text_transform.int_to_text(seq) for seq in decoded_outputs]
+                if self.decoder is not None:
+                    # (time, batch, class) -> (batch, time, class)
+                    predicted_texts = self.decoder.decode_batch(
+                        output.transpose(0, 1), lengths=input_lengths
+                    )
+                else:
+                    decoded_outputs = greedy_decoder(output, blank_label=self.text_transform.blank_label)
+                    predicted_texts = [self.text_transform.int_to_text(seq) for seq in decoded_outputs]
                 # Slice each label to its real length before decoding. Padding is
                 # index 0, which the vocabulary maps to <SPACE>, so decoding the
                 # padded row appends a run of spaces to every short reference.

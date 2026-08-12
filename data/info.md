@@ -15,13 +15,13 @@ repositories and far too large to version.
 ## Fetching the corpora
 
 ```bash
-scripts/download_dataset.sh                                        # ghanaopendata (public)
-scripts/download_dataset.sh --dataset Lagyamfi/akan_audio_processed # gated, needs HF_TOKEN
+scripts/datasets/download_dataset.sh                                        # ghanaopendata (public)
+scripts/datasets/download_dataset.sh --dataset Lagyamfi/akan_audio_processed # gated, needs HF_TOKEN
 ```
 
 Downloads land in `hf_cache/` and `datasets/<repo__name>/<split>/`. Each download
 also writes a manifest (rows, columns, sample transcripts) to
-`outputs/runs/<run_id>/dataset_manifest.json`, which **is** tracked — so the
+`outputs/asr/runs/<run_id>/dataset_manifest.json`, which **is** tracked — so the
 provenance of a dataset survives in git even though its audio does not.
 
 | corpus | clips | audio | clip length | domain | text column | licence |
@@ -68,7 +68,7 @@ Transcripts also code-switch heavily into English (`multimedia`, `acknowledge`,
 how Twi is actually spoken.
 
 ```bash
-scripts/download_dataset.sh --dataset ghananlpcommunity/twi-health-asr-gemini-500hrs --num-samples 200
+scripts/datasets/download_dataset.sh --dataset ghananlpcommunity/twi-health-asr-gemini-500hrs --num-samples 200
 ```
 
 Start with `--num-samples`: the full corpus is 57 GB.

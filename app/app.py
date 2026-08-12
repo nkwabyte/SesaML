@@ -3,7 +3,7 @@
 Gradio front-end for the SesaML Akan speech-to-text models.
 
 Run locally:
-    scripts/serve_app.sh
+    scripts/asr/serve_app.sh
     python app/app.py --share            # public tunnel
 
 Two modes:
@@ -29,10 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gradio as gr
 
 from src.config import PipelineConfig
-from src.diarization import BACKENDS, DiarizationError, DiarizedTranscriber
-from src.diarization.backends import resolve_token
-from src.inference.transcribe import DEFAULT_WHISPER_REPO, Transcriber
-from src.models import ARCHITECTURES
+from src.asr.diarization import BACKENDS, DiarizationError, DiarizedTranscriber
+from src.asr.diarization.backends import resolve_token
+from src.asr.inference.transcribe import DEFAULT_WHISPER_REPO, Transcriber
+from src.asr.models import ARCHITECTURES
 from src.utils.model_registry import ModelRegistry
 from src.utils.run_logger import RunManager, latest_checkpoint, load_model_meta
 
@@ -55,7 +55,7 @@ DESCRIPTION = f"""
 Upload an audio clip or record from your microphone to transcribe Akan (Twi) speech.
 
 - **ctc** — the Conformer model trained in this repo, served from the promoted
-  version in the model registry (`outputs/registry/`).
+  version in the model registry (`outputs/asr/registry/`).
 {"- **whisper** — comparison baseline from `" + WHISPER_REPO + "`." if WHISPER_REPO else ""}
 
 Use the **Speaker Diarization** tab for recordings with more than one speaker.
@@ -64,7 +64,7 @@ Use the **Speaker Diarization** tab for recordings with more than one speaker.
 config = PipelineConfig()
 
 run = RunManager(kind="app", config=config, params={"whisper_repo": WHISPER_REPO})
-registry = ModelRegistry(config.paths.output_dir)
+registry = ModelRegistry(config.paths.domain_dir)
 _transcribers: Dict[str, Transcriber] = {}
 _pipelines: Dict[Tuple[str, str], DiarizedTranscriber] = {}
 
@@ -129,11 +129,11 @@ def model_status(model_type: str) -> str:
             f"<br/>run `{version.run_id or 'unknown'}`{fallback}{alert}"
         )
 
-    checkpoint = latest_checkpoint(config.paths.output_dir)
+    checkpoint = latest_checkpoint(config.paths.domain_dir)
     if checkpoint is None:
         return (
             "⚠️ **No trained checkpoint found.** The CTC model will run with random weights "
-            "and produce gibberish. Train one with `scripts/train.sh`, or switch to Whisper."
+            "and produce gibberish. Train one with `scripts/asr/train.sh`, or switch to Whisper."
         )
     meta = load_model_meta(checkpoint)
     arch = (meta and meta.get("architecture")) or "unknown"
@@ -333,11 +333,11 @@ def diarize(
 
 
 def build_demo() -> gr.Blocks:
-    # Ask the registry, not the filesystem. Checking outputs/checkpoints/ for a
+    # Ask the registry, not the filesystem. Checking outputs/asr/checkpoints/ for a
     # loose file meant that pruning superseded runs - which leaves the published
     # version untouched - made the app fall back to Whisper despite a perfectly
     # good trained model being published and served.
-    has_trained_model = registry.resolve() is not None or latest_checkpoint(config.paths.output_dir)
+    has_trained_model = registry.resolve() is not None or latest_checkpoint(config.paths.domain_dir)
     default_model = "ctc" if has_trained_model or "whisper" not in MODEL_CHOICES else "whisper"
     samples = sorted(str(p) for p in Path("demo_audio").glob("*.wav")) if Path("demo_audio").is_dir() else []
 

@@ -18,9 +18,9 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from ..config import PipelineConfig
+from ...config import PipelineConfig
 from ..inference.transcribe import Transcriber
-from ..utils.audio_io import load_audio
+from ...utils.audio_io import load_audio
 from .backends import DEFAULT_BACKEND, BaseDiarizer, build_diarizer
 from .turns import SpeakerTurn
 

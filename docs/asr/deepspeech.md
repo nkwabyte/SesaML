@@ -2,7 +2,7 @@
 
 ## Overview
 
-The DeepSpeech2 implementation in SesaML (`src/models/deepspeech.py`) is a Convolutional-Recurrent Neural Network with a Connectionist Temporal Classification (CTC) loss function, inspired by Baidu's DeepSpeech 2 architecture.
+The DeepSpeech2 implementation in SesaML (`src/asr/models/deepspeech.py`) is a Convolutional-Recurrent Neural Network with a Connectionist Temporal Classification (CTC) loss function, inspired by Baidu's DeepSpeech 2 architecture.
 
 ## Architecture Specification
 

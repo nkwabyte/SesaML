@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Exports a trained checkpoint to a deployable artifact.
 #
-# The binary lands in outputs/exports/<run_id>/ (git-ignored); the manifest
+# The binary lands in outputs/asr/exports/<run_id>/ (git-ignored); the manifest
 # describing it - format, size, SHA-256, source checkpoint - is stored in
-# outputs/runs/<run_id>/export_manifest.json and IS tracked.
+# outputs/asr/runs/<run_id>/export_manifest.json and IS tracked.
 #
 # Usage:
-#   scripts/export_model.sh                                     # TorchScript .pt
-#   scripts/export_model.sh --format state_dict                 # plain .pth
-#   scripts/export_model.sh --format executorch                 # on-device .pte
-#   scripts/export_model.sh --model-path outputs/checkpoints/train-.../best_model.pt
+#   scripts/asr/export_model.sh                                     # TorchScript .pt
+#   scripts/asr/export_model.sh --format state_dict                 # plain .pth
+#   scripts/asr/export_model.sh --format executorch                 # on-device .pte
+#   scripts/asr/export_model.sh --model-path outputs/asr/checkpoints/train-.../best_model.pt
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 bootstrap
 
 FORMAT="${FORMAT:-torchscript}"

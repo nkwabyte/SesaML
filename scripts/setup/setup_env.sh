@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Creates the project virtualenv and installs dependencies.
 #
-# Usage: scripts/setup_env.sh [--recreate]
+# Usage: scripts/setup/setup_env.sh [--recreate]
 
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 
 RECREATE=0
 for arg in "$@"; do
@@ -36,9 +36,9 @@ log "Installing requirements.txt"
 python -m pip install -r "${REPO_ROOT}/requirements.txt"
 
 mkdir -p "${REPO_ROOT}/outputs/logs" \
-         "${REPO_ROOT}/outputs/runs" \
-         "${REPO_ROOT}/outputs/checkpoints" \
-         "${REPO_ROOT}/outputs/exports" \
+         "${REPO_ROOT}/outputs/asr/runs" \
+         "${REPO_ROOT}/outputs/asr/checkpoints" \
+         "${REPO_ROOT}/outputs/asr/exports" \
          "${REPO_ROOT}/data"
 
 if [[ ! -f "${REPO_ROOT}/.env" && -f "${REPO_ROOT}/env.template" ]]; then

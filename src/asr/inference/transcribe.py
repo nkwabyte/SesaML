@@ -3,15 +3,15 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn.functional as F
 
-from ..config import PipelineConfig
+from ...config import PipelineConfig
 from ..data.text_transform import TextTransform
 from ..data.audio_transforms import get_valid_audio_transforms
 from ..models import build_architecture, SpeechRecognitionModel
 from ..models.whisper_model import WhisperASR
-from ..training.evaluator import greedy_decoder
-from ..utils.audio_io import load_audio
-from ..utils.noise_reduction import reduce_audio_noise
-from ..utils.run_logger import load_model_meta, load_weights, resolve_checkpoint
+from ..decoding import build_decoder
+from ...utils.audio_io import load_audio
+from ...utils.noise_reduction import reduce_audio_noise
+from ...utils.run_logger import load_model_meta, load_weights, resolve_checkpoint
 
 # No default Whisper repository. The project serves its own trained models out
 # of the registry; Whisper remains available as a comparison baseline but only
@@ -69,7 +69,7 @@ class Transcriber:
                 raise ValueError(
                     "The whisper backend needs a repository id: pass --whisper-repo, or set "
                     "MODEL_REPO_ID in .env. There is no default - this project serves the "
-                    "models it trained, published under outputs/registry/ (see "
+                    "models it trained, published under outputs/asr/registry/ (see "
                     "`python -m src.main models list`)."
                 )
             self.model_path = whisper_repo
@@ -87,6 +87,9 @@ class Transcriber:
         # Time reduction the encoder applies, used to reject clips too short to
         # produce any output frame at all.
         self.subsampling_factor = getattr(self._model, "subsampling_factor", 2) if self._model else 1
+        # Shared with evaluation, so the WER a run reports describes the system
+        # the app actually serves.
+        self.decoder = build_decoder(self.config, self.text_transform)
 
         # Inference must use exactly the features training used - n_fft and
         # hop_length included, or the model sees a different time resolution
@@ -170,8 +173,8 @@ class Transcriber:
             output = self._model(spec)
             output = F.log_softmax(output, dim=2)
             output = output.transpose(0, 1)  # (time, batch, class)
-            decoded_outputs = greedy_decoder(output, blank_label=self.text_transform.blank_label)
-            return self.text_transform.int_to_text(decoded_outputs[0])
+            # (time, batch, class) -> the single utterance's (time, class)
+            return self.decoder.decode(output[:, 0, :])
 
     def transcribe_segment(
         self,

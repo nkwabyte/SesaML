@@ -9,23 +9,27 @@ corpora, and can also serve a fine-tuned Whisper model for comparison. Every
 command writes its config, metrics, predictions and logs into `outputs/`, so
 experiments stay comparable long after the terminal scrollback is gone.
 
-**Current model:** Conformer-CTC, **WER 0.4701 / CER 0.1429** on a held-out split —
-trained from scratch on 12.3 hours of Akan audio, then fine-tuned with a warm restart.
+**Current model:** Conformer-CTC, **WER 0.3898 / CER 0.1277** on a held-out split —
+trained from scratch on 12.3 hours of Akan audio, fine-tuned with a warm restart,
+and decoded with beam search plus a Twi character n-gram language model. The
+language model alone accounts for a **17.2% relative WER reduction**, with no
+retraining (0.4705 greedy → 0.3898).
 
 > Corpus reference — *Wɔbɛtumi akɔ dan a ɛtoa wɔn so no ne ne yɔnko…*
 > Model output — *wɔbɛtumi akɔdan a ɛtoa wɔn so no ne onyankoa…*
 
-Every measured number is in [docs/results.md](docs/results.md), including a
+Every measured number is in [docs/asr/results.md](docs/asr/results.md), including a
 negative result worth reading: adding 100 hours of a 500-hour corpus made the
 model strictly worse.
 
 ```bash
-scripts/setup_env.sh                  # venv + dependencies
-scripts/download_all_datasets.sh      # fetch the corpora into data/
-scripts/train.sh --epochs 80          # train, logging to outputs/
-scripts/evaluate.sh                   # WER / CER on held-out audio
-python -m src.main models list        # which model version is served
-scripts/serve_app.sh                  # try it in a browser
+scripts/setup/setup_env.sh                 # venv + dependencies
+scripts/datasets/download_all_datasets.sh  # fetch the corpora into data/
+scripts/asr/train.sh --epochs 80           # train, logging to outputs/
+scripts/asr/evaluate.sh                    # WER / CER on held-out audio
+python scripts/lm/build_lm.py              # Twi n-gram LM used for decoding
+python -m src.main models list             # which model version is served
+scripts/asr/serve_app.sh                   # try it in a browser
 ```
 
 ## Layout
@@ -37,7 +41,7 @@ scripts/serve_app.sh                  # try it in a browser
 | [app/](app/info.md) | Gradio web front-end |
 | [data/](data/info.md) | checked-in corpus; downloaded audio stays untracked |
 | [outputs/](outputs/info.md) | run logs, metrics, checkpoints and the model registry |
-| [tests/](tests/info.md) | fast dependency-light test suite (144 tests) |
+| [tests/](tests/info.md) | fast dependency-light test suite (187 tests) |
 | [docs/](docs/info.md) | measured results, architecture, diarization, and roadmap |
 | `notebooks/` | exploratory analysis |
 
@@ -51,10 +55,10 @@ Requires **Python ≥ 3.10, < 3.14** (Python **3.11** or **3.12** recommended; P
 git clone https://github.com/nkwabyte/SesaML.git && cd SesaML
 
 # Standard setup:
-scripts/setup_env.sh
+scripts/setup/setup_env.sh
 
 # Or specify a Python version manager binary (pyenv, brew, asdf, etc.):
-PYTHON=python3.11 scripts/setup_env.sh
+PYTHON=python3.11 scripts/setup/setup_env.sh
 ```
 
 That creates `.venv`, installs `requirements.txt`, seeds `.env` from
@@ -66,7 +70,7 @@ HF_TOKEN=hf_...
 ```
 
 `MODEL_REPO_ID` is optional and empty by default — the app serves the models
-trained in this repo, from `outputs/registry/`. Set it only to add a Whisper
+trained in this repo, from `outputs/asr/registry/`. Set it only to add a Whisper
 baseline alongside them for comparison.
 
 ## Data
@@ -84,16 +88,16 @@ The transcription column is auto-detected, so corpora that name it `text`,
 
 ```bash
 # 1. Download all full Akan corpora (ghanaopendata, Lagyamfi, ghananlpcommunity 500h)
-scripts/download_all_datasets.sh
+scripts/datasets/download_all_datasets.sh
 # 2. Download a small smoke-test slice (e.g. 100 samples each across all 3 corpora)
-scripts/download_all_datasets.sh --num-samples 100
+scripts/datasets/download_all_datasets.sh --num-samples 100
 # 3. Download with an explicit HuggingFace token for gated access
-scripts/download_all_datasets.sh --token hf_...
+scripts/datasets/download_all_datasets.sh --token hf_...
 ```
 
 Audio lands in `data/` and is never committed. The manifest describing each
 download — row counts, columns, sample transcripts — is written to
-`outputs/runs/<run_id>/dataset_manifest.json`, which **is** committed, so a
+`outputs/asr/runs/<run_id>/dataset_manifest.json`, which **is** committed, so a
 dataset's provenance survives in git even though its audio does not.
 
 > `Lagyamfi/akan_audio_processed` advertises 26,906 rows across 22 splits, but
@@ -108,9 +112,9 @@ opt-in rather than a default. See [data/info.md](data/info.md#the-health-corpus)
 ## Training
 
 ```bash
-scripts/train.sh                                    # both corpora combined
-scripts/train.sh --epochs 30 --batch-size 16
-EPOCHS=50 LEARNING_RATE=3e-4 scripts/train.sh
+scripts/asr/train.sh                                    # both corpora combined
+scripts/asr/train.sh --epochs 30 --batch-size 16
+EPOCHS=50 LEARNING_RATE=3e-4 scripts/asr/train.sh
 ```
 
 By default this trains on the base splits of both corpora and validates on
@@ -134,7 +138,7 @@ There is no default corpus: a data source must be named.
 
 Each run writes per-step and per-epoch metrics, keeps `best_model.pt` and
 `last_model.pt`, survives Ctrl-C with its partial weights intact, and can be
-continued with `--resume outputs/checkpoints/<run_id>/last_model.pt`.
+continued with `--resume outputs/asr/checkpoints/<run_id>/last_model.pt`.
 
 ### On the 500-hour health corpus
 
@@ -147,7 +151,7 @@ The health corpus is 59,291 clips of *exactly* 30 s with Gemini-generated
 transcripts, and CTC cannot align ~400 characters over 750 encoder frames from a
 random initialisation. Before spending GPU time on it again: fine-tune from the
 working checkpoint rather than from scratch, and segment those 30 s clips into
-utterances. Numbers in [docs/results.md](docs/results.md), plan in
+utterances. Numbers in [docs/asr/results.md](docs/asr/results.md), plan in
 [docs/roadmap_next_steps.md](docs/roadmap_next_steps.md).
 
 Batches are length-bucketed by default, which is what makes mixing corpora
@@ -157,7 +161,7 @@ on. Disable with `--no-bucket-batches`.
 
 ## Model versions
 
-Every finished run is archived in the model registry at `outputs/registry/`, and
+Every finished run is archived in the model registry at `outputs/asr/registry/`, and
 the app, CLI and evaluation serve the **promoted** version — not whichever file
 is newest.
 
@@ -211,17 +215,17 @@ Three backends, picked with `--backend`:
 `auto` takes the best that loads, so a missing licence downgrades the demo
 instead of ending it. Pass `--num-speakers` when the count is known; automatic
 speaker counting is the weak point of the embedding backends. Full write-up in
-[docs/speaker_diarization.md](docs/speaker_diarization.md).
+[docs/asr/speaker_diarization.md](docs/asr/speaker_diarization.md).
 
 ## Evaluating and exporting
 
 ```bash
-scripts/evaluate.sh                            # served model version, loss/WER/CER
-scripts/evaluate.sh --model-path outputs/registry/conformer/v001/model.pt
-scripts/export_model.sh --format torchscript   # .pt
-scripts/export_model.sh --format state_dict    # .pth
-scripts/export_model.sh --format executorch    # .pte, for on-device
-python scripts/summarize_runs.py               # compare every run so far
+scripts/asr/evaluate.sh                            # served model version, loss/WER/CER
+scripts/asr/evaluate.sh --model-path outputs/asr/registry/conformer/v001/model.pt
+scripts/asr/export_model.sh --format torchscript   # .pt
+scripts/asr/export_model.sh --format state_dict    # .pth
+scripts/asr/export_model.sh --format executorch    # .pte, for on-device
+python scripts/maintenance/summarize_runs.py               # compare every run so far
 ```
 
 Evaluation saves per-sample reference/hypothesis pairs alongside the headline
@@ -232,8 +236,8 @@ not committed.
 ## The app
 
 ```bash
-scripts/serve_app.sh          # http://127.0.0.1:7860
-scripts/serve_app.sh --share  # public tunnel
+scripts/asr/serve_app.sh          # http://127.0.0.1:7860
+scripts/asr/serve_app.sh --share  # public tunnel
 ```
 
 Two tabs: **Transcribe** for a single block of text, and **Speaker Diarization**
@@ -248,17 +252,17 @@ Space entrypoint. See [app/info.md](app/info.md).
 
 ## The models
 
-Multiple CTC architectures share a uniform interface (`src/models/`):
+Multiple CTC architectures share a uniform interface (`src/asr/models/`):
 
-- `deepspeech` (default) — DeepSpeech2-style residual CNN + bidirectional GRU ([src/models/deepspeech.py](src/models/deepspeech.py)), 2× time subsampling.
-- `conformer` — Conformer-S encoder with attention, depthwise convolution and macaron feed-forwards ([src/models/conformer.py](src/models/conformer.py)), 8.4M parameters, 4× time subsampling. **This is the trained model: WER 0.510, CER 0.166.**
+- `deepspeech` (default) — DeepSpeech2-style residual CNN + bidirectional GRU ([src/asr/models/deepspeech.py](src/asr/models/deepspeech.py)), 2× time subsampling.
+- `conformer` — Conformer-S encoder with attention, depthwise convolution and macaron feed-forwards ([src/asr/models/conformer.py](src/asr/models/conformer.py)), 8.4M parameters, 4× time subsampling. **This is the trained model: WER 0.510, CER 0.166.**
 - `conformer-medium` — Conformer-M encoder, ~27M parameters, 4× time subsampling.
 
 Pass `--architecture` to train, evaluate, or transcribe:
 
 ```bash
-scripts/train.sh --architecture conformer
-ARCHITECTURE=conformer-medium scripts/train.sh
+scripts/asr/train.sh --architecture conformer
+ARCHITECTURE=conformer-medium scripts/asr/train.sh
 ```
 
 Every checkpoint stores its architecture metadata beside the weights, so evaluation, export and the web app detect the architecture automatically — in a run directory as `model_meta.json`, in a registry version as `metadata.json`.
@@ -289,18 +293,18 @@ outputs/
 ```
 
 Run artifacts are machine-generated and accumulate quickly, so they are not
-committed; use `python scripts/summarize_runs.py` to compare runs locally. The
+committed; use `python scripts/maintenance/summarize_runs.py` to compare runs locally. The
 registry is the exception — its `registry.json` and per-version `metadata.json`
 *are* tracked, because they record which model was served when and at what WER.
 Full contract in [outputs/info.md](outputs/info.md).
 
 Training leaves three checkpoint files per run and the resumable one is ~3× the
-weights, so a few iterations is gigabytes. `scripts/clean_outputs.py` prunes what
+weights, so a few iterations is gigabytes. `scripts/maintenance/clean_outputs.py` prunes what
 is no longer in use:
 
 ```bash
-python scripts/clean_outputs.py            # dry run: what would go
-python scripts/clean_outputs.py --apply    # delete it
+python scripts/maintenance/clean_outputs.py            # dry run: what would go
+python scripts/maintenance/clean_outputs.py --apply    # delete it
 ```
 
 It never touches `registry/`, protects the runs that produced published versions
@@ -317,7 +321,7 @@ failed.
 scripts/run_tests.sh
 ```
 
-144 tests, fast and synthetic — no data, checkpoint or network required. Covers
+187 tests, fast and synthetic — no data, checkpoint or network required. Covers
 text encoding, model shapes, audio transforms, greedy decoding, WER/CER, corpus
 guards, ragged batches, length bucketing, speaker diarization, the model
 registry and the outputs cleaner.

@@ -1,7 +1,7 @@
 """Model export helpers.
 
 Exported artifacts (`.pt`, `.pth`, `.pte`) are written to
-`outputs/exports/<run_id>/` and are deliberately excluded from version control;
+`outputs/asr/exports/<run_id>/` and are deliberately excluded from version control;
 the manifest describing them is stored with the run and IS tracked.
 """
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
-from ..config import PipelineConfig
+from ...config import PipelineConfig
 
 EXPORT_FORMATS = ("torchscript", "state_dict", "executorch")
 

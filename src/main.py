@@ -5,18 +5,18 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.config import PipelineConfig
-from src.data.text_transform import TextTransform
-from src.data.audio_transforms import get_train_audio_transforms, get_valid_audio_transforms
-from src.data.bucketing import LengthBucketedBatchSampler, dataset_lengths, padding_efficiency
-from src.diarization import BACKENDS as DIARIZATION_BACKENDS
-from src.diarization import DiarizedTranscriber, format_transcript
-from src.data.dataset import AkanAudioDataset, AudioCollator
-from src.data.hf_dataset import parse_dataset_spec
-from src.inference.export import EXPORT_FORMATS, export_model
-from src.inference.transcribe import load_deepspeech_model, transcribe_audio
-from src.models import ARCHITECTURES, build_architecture, subsampling_factor
-from src.training.trainer import Trainer
-from src.training.evaluator import Evaluator
+from src.asr.data.text_transform import TextTransform
+from src.asr.data.audio_transforms import get_train_audio_transforms, get_valid_audio_transforms
+from src.asr.data.bucketing import LengthBucketedBatchSampler, dataset_lengths, padding_efficiency
+from src.asr.diarization import BACKENDS as DIARIZATION_BACKENDS
+from src.asr.diarization import DiarizedTranscriber, format_transcript
+from src.asr.data.dataset import AkanAudioDataset, AudioCollator
+from src.asr.data.hf_dataset import parse_dataset_spec
+from src.asr.inference.export import EXPORT_FORMATS, export_model
+from src.asr.inference.transcribe import load_deepspeech_model, transcribe_audio
+from src.asr.models import ARCHITECTURES, build_architecture, subsampling_factor
+from src.asr.training.trainer import Trainer
+from src.asr.training.evaluator import Evaluator
 from src.utils.model_registry import ModelRegistry
 from src.utils.run_logger import RunManager, load_weights, resolve_checkpoint
 
@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("--model-type", choices=["deepspeech", "whisper"], default="deepspeech", help="Model type to use for transcription")
     transcribe_parser.add_argument("--architecture", choices=arch_choices, default="deepspeech", help="CTC model architecture when model-type is deepspeech")
     transcribe_parser.add_argument("--model-path", default=None, help="Path to model checkpoint (.pt / .pth)")
-    transcribe_parser.add_argument("--whisper-repo", default=None, help="HuggingFace repository ID for the Whisper comparison baseline. No default: this project serves its own trained models from outputs/registry/")
+    transcribe_parser.add_argument("--whisper-repo", default=None, help="HuggingFace repository ID for the Whisper comparison baseline. No default: this project serves its own trained models from outputs/asr/registry/")
     transcribe_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
     transcribe_parser.add_argument("--noise-reduction", action="store_true", help="Apply spectral gate noise reduction before transcription")
     transcribe_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
@@ -66,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--grad-clip", type=float, default=None, help="Max gradient norm (default 5.0; 0 disables clipping)")
     train_parser.add_argument("--allow-no-validation", action="store_true", help="Permit a multi-epoch run with no validation set (no WER/CER will be computed)")
     train_parser.add_argument("--no-bucket-batches", dest="bucket_batches", action="store_false", default=True, help="Disable length-bucketed batching (batches clips of similar duration together to avoid paying compute for padding)")
+    train_parser.add_argument("--min-headroom", type=float, default=None, metavar="RATIO",
+        help="Drop samples whose CTC target needs more encoder frames than the audio provides. "
+             "1.0 keeps everything alignable; higher values also drop the hard ones. "
+             "Feasibility is always reported, filtering only happens when this is set")
     train_parser.add_argument("--limit-rows", type=int, default=None, metavar="N", help="Use at most N evenly-spaced rows from each --hf-dataset, for bounding a run against a very large corpus")
     train_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
 
@@ -89,6 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--split", default="train", help="Default split for --hf-dataset entries that omit one")
     eval_parser.add_argument("--model-path", default=None, help="Path to model checkpoint")
     eval_parser.add_argument("--device", default=None, help="Compute device to use (cpu, cuda, mps)")
+    eval_parser.add_argument("--decoder", choices=["greedy", "beam"], default=None,
+        help="greedy takes the argmax per frame; beam searches prefixes and fuses the n-gram "
+             "language model. Measured 0.4725 -> 0.3936 WER on the validation split")
+    eval_parser.add_argument("--lm", dest="lm_path", default=None, help="Path to the character n-gram LM (build with scripts/lm/build_lm.py)")
+    eval_parser.add_argument("--alpha", type=float, default=None, help="Language model weight (default 0.5)")
+    eval_parser.add_argument("--beta", type=float, default=None, help="Per-character bonus offsetting the LM's brevity bias (default 0.5)")
+    eval_parser.add_argument("--beam-width", type=int, default=None, help="Beam width (default 25)")
     eval_parser.add_argument("--run-id", default=None, help="Explicit run id for the outputs/ directory")
 
     # Models sub-command: the versioned registry of trained exports
@@ -140,12 +151,12 @@ def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path, limit_ro
     There is deliberately no default corpus. This used to fall back to
     `data/corpus/verified_data.csv`, which is a text-only translation table with
     no audio: a bare `python -m src.main train` silently trained on it for 30
-    epochs. scripts/train.sh supplies the real corpora, and anyone bypassing the
+    epochs. scripts/asr/train.sh supplies the real corpora, and anyone bypassing the
     script should have to say what they mean.
     """
     if hf_datasets:
         specs = [hf_datasets] if isinstance(hf_datasets, str) else list(hf_datasets)
-        from src.data.hf_dataset import combine_datasets, load_hf_datasets
+        from src.asr.data.hf_dataset import combine_datasets, load_hf_datasets
         parts = load_hf_datasets(
             specs, sample_rate=config.audio.sample_rate, default_split=split, limit_rows=limit_rows
         )
@@ -155,7 +166,7 @@ def build_dataset(config: PipelineConfig, hf_datasets, split, csv_path, limit_ro
         raise ValueError(
             "No data source given. Pass --hf-dataset REPO[:SPLIT] (repeatable) or "
             "--csv-path PATH to a manifest with audio-path and transcription columns. "
-            "scripts/train.sh supplies the project's default Akan corpora."
+            "scripts/asr/train.sh supplies the project's default Akan corpora."
         )
 
     dataset = AkanAudioDataset(csv_file=csv_path, sample_rate=config.audio.sample_rate)
@@ -399,6 +410,9 @@ def run_train(args, config: PipelineConfig) -> None:
         )
         for source in sources:
             log_corpus_report(run, source, "Train", config)
+        dataset = apply_feasibility_filter(
+            dataset, config, text_transform, run, args.min_headroom, role="Train"
+        )
         run.logger.info("Training samples: %d | Architecture: %s", len(dataset), config.model.architecture)
 
         stride = subsampling_factor(config.model.architecture)
@@ -480,6 +494,82 @@ def run_train(args, config: PipelineConfig) -> None:
         run.logger.exception("Training run failed")
         run.finish(status="failed", summary={"error": f"{type(exc).__name__}: {exc}"})
         raise
+
+def dataset_targets(dataset, text_transform) -> list:
+    """
+    Encoded label sequences for a dataset, without decoding any audio.
+
+    Needed to tell which samples CTC can actually align. Text is cheap to read;
+    the durations come from the cache length-bucketing already builds.
+    """
+    from torch.utils.data import ConcatDataset
+
+    if isinstance(dataset, ConcatDataset):
+        targets = []
+        for part in dataset.datasets:
+            targets.extend(dataset_targets(part, text_transform))
+        return targets
+
+    if hasattr(dataset, "texts"):
+        return [text_transform.text_to_int(t) for t in dataset.texts()]
+
+    raise TypeError(f"{type(dataset).__name__} cannot report its transcripts")
+
+
+def apply_feasibility_filter(dataset, config, text_transform, run, min_headroom, role="Train"):
+    """
+    Reports how much of a corpus CTC can align, and optionally drops the rest.
+
+    A sample whose target needs more frames than the encoder produces has no
+    valid alignment: `zero_infinity` turns its infinite loss into a zero, so it
+    fills a batch slot and returns no gradient. Measured here, 19% of
+    ghanaopendata was in that state - a fifth of a corpus training on nothing.
+    """
+    from torch.utils.data import Subset
+
+    from src.asr.data.feasibility import assess, feasible_indices
+
+    try:
+        durations = dataset_lengths(dataset, sample_rate=config.audio.sample_rate)
+        targets = dataset_targets(dataset, text_transform)
+    except TypeError as exc:
+        run.logger.warning("Cannot assess CTC feasibility: %s", exc)
+        return dataset
+
+    subsampling = subsampling_factor(config.model.architecture)
+    report = assess(
+        durations, targets, config.audio.sample_rate, config.audio.hop_length, subsampling
+    )
+    run.logger.info("%s CTC feasibility: %s", role, report.to_dict())
+
+    if report.infeasible:
+        run.logger.warning(
+            "%s: %d of %d samples (%.1f%%) cannot be aligned - their target needs more "
+            "frames than the encoder produces, so CTC scores them as zero and they "
+            "contribute no gradient. Pass --min-headroom 1.0 to drop them.",
+            role, report.infeasible, report.total, 100 * report.infeasible_ratio
+        )
+
+    if not min_headroom:
+        return dataset
+
+    keep = feasible_indices(
+        durations, targets, config.audio.sample_rate, config.audio.hop_length,
+        subsampling, min_headroom=min_headroom,
+    )
+    dropped = len(durations) - len(keep)
+    if not keep:
+        raise ValueError(
+            f"{role} corpus has no samples with headroom >= {min_headroom}. Every target "
+            f"needs more encoder frames than its audio provides; lower --min-headroom, or "
+            f"check that the transcripts belong to the audio."
+        )
+    run.logger.info(
+        "%s: keeping %d of %d samples at headroom >= %.2f (dropped %d)",
+        role, len(keep), len(durations), min_headroom, dropped
+    )
+    return Subset(dataset, keep)
+
 
 def run_diarize(args, config: PipelineConfig) -> None:
     if getattr(args, "architecture", None):
@@ -567,8 +657,18 @@ def run_evaluate(args, config: PipelineConfig) -> None:
         else:
             run.logger.warning("Checkpoint %s not found - evaluating an untrained model", model_path)
 
+        for name in ("decoder", "lm_path", "alpha", "beta", "beam_width"):
+            value = getattr(args, name, None)
+            if value is not None:
+                setattr(config.decoding, name, value)
+
+        from src.asr.decoding import build_decoder
+
+        decoder = build_decoder(config, text_transform)
+        run.logger.info("Decoder: %s", decoder.describe())
+
         criterion = torch.nn.CTCLoss(blank=text_transform.blank_label)
-        evaluator = Evaluator(model, criterion, config.device, text_transform)
+        evaluator = Evaluator(model, criterion, config.device, text_transform, decoder=decoder)
         metrics = evaluator.evaluate(val_loader, return_predictions=True)
         predictions = metrics.pop("predictions", [])
 
@@ -588,10 +688,10 @@ def run_evaluate(args, config: PipelineConfig) -> None:
 def run_models(args, config: PipelineConfig) -> None:
     """
     Registry management. Deliberately does not open a RunManager: listing
-    versions is a read, and it should not litter outputs/runs/ with a directory
+    versions is a read, and it should not litter outputs/asr/runs/ with a directory
     per invocation.
     """
-    registry = ModelRegistry(config.paths.output_dir)
+    registry = ModelRegistry(config.paths.domain_dir)
     command = getattr(args, "models_command", None) or "list"
 
     if command == "list":

@@ -5,9 +5,9 @@ Downloads all supported Akan speech datasets into local `data/` directory at a g
 Cross-platform (Windows, macOS, Linux).
 
 Examples:
-    python scripts/download_all_datasets.py
-    python scripts/download_all_datasets.py --num-samples 100
-    python scripts/download_all_datasets.py --token hf_...
+    python scripts/datasets/download_all_datasets.py
+    python scripts/datasets/download_all_datasets.py --num-samples 100
+    python scripts/datasets/download_all_datasets.py --token hf_...
 """
 
 import argparse
@@ -29,7 +29,7 @@ def main():
     parser.add_argument("--token", default=None, help="HuggingFace access token")
     args, unknown = parser.parse_known_args()
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     download_script = repo_root / "scripts" / "download_dataset.py"
 
     print(f"[sesaml] Starting bulk download of {len(CORPORA)} Akan datasets into data/...")

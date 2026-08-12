@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
-# Shared helpers sourced by every script in this directory.
+# Shared helpers sourced by every script under scripts/.
 # Not meant to be executed directly.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Walk up to the repository root rather than assuming a fixed depth: scripts
+# live in subdirectories (asr/, datasets/, lm/, ...), and a hard-coded `..` was
+# only ever correct while they all sat directly in scripts/.
+REPO_ROOT="${SCRIPT_DIR}"
+while [[ "${REPO_ROOT}" != "/" && ! -f "${REPO_ROOT}/requirements.txt" ]]; do
+  REPO_ROOT="$(dirname "${REPO_ROOT}")"
+done
+[[ -f "${REPO_ROOT}/requirements.txt" ]] || {
+  printf '\033[1;31m[sesaml]\033[0m Could not locate the repository root from %s\n' "${SCRIPT_DIR}" >&2
+  exit 1
+}
+
+SCRIPTS_DIR="${REPO_ROOT}/scripts"
 VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
 
 cd "${REPO_ROOT}"
@@ -18,7 +31,7 @@ die()  { printf '\033[1;31m[sesaml]\033[0m %s\n' "$*" >&2; exit 1; }
 #
 # Parsed line by line rather than sourced. `source .env` executes the file as a
 # shell script, so any stray line runs as a command - a pasted
-# `python scripts/download_all_datasets.py ...` left in .env re-downloaded every
+# `python scripts/datasets/download_all_datasets.py ...` left in .env re-downloaded every
 # corpus on each invocation of every script, before the actual work started.
 # Only KEY=VALUE assignments are honoured here, and anything else is reported
 # rather than run.
@@ -85,8 +98,8 @@ detect_python() {
     fi
   done
 
-  if [[ -x "${SCRIPT_DIR}/ensure_python.sh" ]]; then
-    "${SCRIPT_DIR}/ensure_python.sh"
+  if [[ -x "${SCRIPTS_DIR}/setup/ensure_python.sh" ]]; then
+    "${SCRIPTS_DIR}/setup/ensure_python.sh"
   else
     echo "python3"
   fi
@@ -105,7 +118,7 @@ activate_venv() {
     source "${VENV_DIR}/Scripts/activate"
     log "Activated virtualenv: ${VENV_DIR}"
   else
-    warn "No virtualenv found at ${VENV_DIR} - using system Python (run scripts/setup_env.sh to create one)"
+    warn "No virtualenv found at ${VENV_DIR} - using system Python (run scripts/setup/setup_env.sh to create one)"
   fi
 
   PYTHON="$(detect_python)"
@@ -118,13 +131,13 @@ activate_venv() {
 bootstrap() {
   load_env
   activate_venv
-  mkdir -p "${REPO_ROOT}/outputs/logs" "${REPO_ROOT}/outputs/runs"
+  mkdir -p "${REPO_ROOT}/outputs/logs" "${REPO_ROOT}/outputs/asr/runs"
 }
 
 # Prints the newest run directory of a given kind, e.g. `latest_run train`.
 latest_run() {
   local kind="${1:-}"
-  local runs_dir="${REPO_ROOT}/outputs/runs"
+  local runs_dir="${REPO_ROOT}/outputs/asr/runs"
   [[ -d "${runs_dir}" ]] || return 1
   ls -1d "${runs_dir}/${kind}"*/ 2>/dev/null | sort | tail -n 1
 }

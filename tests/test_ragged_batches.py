@@ -17,10 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.config import PipelineConfig
-from src.data.dataset import data_processing
-from src.data.text_transform import TextTransform
+from src.asr.data.dataset import data_processing
+from src.asr.data.text_transform import TextTransform
 from src.main import valid_transforms_for
-from src.models import build_architecture, subsampling_factor
+from src.asr.models import build_architecture, subsampling_factor
 
 ARCHITECTURES = ["deepspeech", "conformer", "conformer-medium"]
 

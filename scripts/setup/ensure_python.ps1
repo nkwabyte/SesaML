@@ -2,7 +2,7 @@
 # If none is found, auto-installs Python 3.11 via uv or winget.
 #
 # Usage:
-#   .\scripts\ensure_python.ps1
+#   .\scripts\\setup\\ensure_python.ps1
 
 $ErrorActionPreference = "Stop"
 

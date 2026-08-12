@@ -1,8 +1,8 @@
 import torch
 import pytest
-from src.models import build_architecture, subsampling_factor, ARCHITECTURES
-from src.models.deepspeech import SpeechRecognitionModel
-from src.models.conformer import ConformerCTC, conformer_ctc_small
+from src.asr.models import build_architecture, subsampling_factor, ARCHITECTURES
+from src.asr.models.deepspeech import SpeechRecognitionModel
+from src.asr.models.conformer import ConformerCTC, conformer_ctc_small
 
 def test_speech_recognition_model_forward():
     batch_size = 2
