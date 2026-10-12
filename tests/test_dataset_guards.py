@@ -19,13 +19,13 @@ import pytest
 import torch
 
 from src.config import PipelineConfig
-from src.data.dataset import (
+from src.asr.data.dataset import (
     AkanAudioDataset,
     EmptyLabelError,
     MissingAudioError,
     data_processing,
 )
-from src.data.text_transform import TextTransform
+from src.asr.data.text_transform import TextTransform
 from src.main import valid_transforms_for
 
 

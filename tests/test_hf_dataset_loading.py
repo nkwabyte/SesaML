@@ -14,7 +14,7 @@ import os
 import pytest
 import torch
 
-from src.data.hf_dataset import (
+from src.asr.data.hf_dataset import (
     DEFAULT_LOCAL_DIR,
     HuggingFaceAkanDataset,
     parse_dataset_spec,
@@ -87,7 +87,7 @@ def test_getitem_still_accepts_a_decoded_array():
 
 
 def test_missing_audio_raises_rather_than_substituting_noise():
-    from src.data.dataset import MissingAudioError
+    from src.asr.data.dataset import MissingAudioError
 
     rows = [{"audio": {"array": None, "bytes": None, "path": None}, "sentence": "maakye"}]
     dataset = HuggingFaceAkanDataset(hf_dataset=rows, sample_rate=16000, text_column="sentence")

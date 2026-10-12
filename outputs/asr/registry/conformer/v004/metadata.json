@@ -1,0 +1,22 @@
+{
+  "architecture": "conformer",
+  "version": "v004",
+  "run_id": "run-v2-finetune",
+  "published_at": "2026-08-11T11:05:36",
+  "source_checkpoint": "outputs\\checkpoints\\run-v2-finetune\\speech_recognition_model.pt",
+  "size_bytes": 33768397,
+  "sha256": "8d4ecfca3dcaaa201bb68624c3d157895a5e70376969de0608444c0fdf8d73a1",
+  "metrics": {
+    "wer": 0.4701,
+    "cer": 0.1429
+  },
+  "features": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "n_fft": 400,
+    "hop_length": 160,
+    "vocab_size": 41,
+    "subsampling_factor": 4
+  },
+  "notes": "Fine-tuned from v001, 40 epochs @ lr 2.5e-4. Final-epoch weights; WER/CER measured by direct evaluation, not taken from the training log."
+}

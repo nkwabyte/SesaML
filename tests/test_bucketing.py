@@ -10,7 +10,7 @@ destroying the randomness that training depends on.
 
 import pytest
 
-from src.data.bucketing import (
+from src.asr.data.bucketing import (
     LengthBucketedBatchSampler,
     dataset_lengths,
     padding_efficiency,

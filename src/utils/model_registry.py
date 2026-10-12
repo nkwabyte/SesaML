@@ -20,7 +20,7 @@ Two rules carry the safety:
 
 Layout::
 
-    outputs/registry/
+    outputs/asr/registry/
         registry.json               pointers and promotion history
         conformer/
             v001/model.pt
@@ -136,7 +136,7 @@ class ModelVersion:
 class ModelRegistry:
     """Publishes, promotes and resolves versioned model exports."""
 
-    def __init__(self, output_dir: str = "outputs"):
+    def __init__(self, output_dir: str = "outputs/asr"):
         self.root = Path(output_dir) / REGISTRY_DIRNAME
         self.index_path = self.root / INDEX_FILENAME
 

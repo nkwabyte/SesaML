@@ -1,5 +1,5 @@
 import pytest
-from src.data.text_transform import TextTransform
+from src.asr.data.text_transform import TextTransform
 
 def test_text_transform_basic():
     tt = TextTransform()
