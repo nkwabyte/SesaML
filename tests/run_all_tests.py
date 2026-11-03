@@ -44,6 +44,23 @@ class TestSesaML(unittest.TestCase):
         self.assertEqual(train_spec.shape[1], 80)
         self.assertEqual(valid_spec.shape[1], 80)
 
+    def test_speed_perturbation_is_training_only(self):
+        from src.asr.data.audio_transforms import SpeedPerturbation
+
+        waveform = torch.randn(1, 16000)
+        unchanged = SpeedPerturbation(factors=(1.0,))(waveform)
+        self.assertEqual(unchanged.shape, waveform.shape)
+        torch.testing.assert_close(unchanged, waveform)
+
+        faster = SpeedPerturbation(factors=(2.0,))(waveform)
+        self.assertLess(faster.shape[-1], waveform.shape[-1] * 0.6)
+        self.assertGreater(faster.shape[-1], waveform.shape[-1] * 0.4)
+
+        train_tf = get_train_audio_transforms(16000, 80)
+        valid_tf = get_valid_audio_transforms(16000, 80)
+        self.assertIsInstance(train_tf[0], SpeedPerturbation)
+        self.assertFalse(any(isinstance(stage, SpeedPerturbation) for stage in valid_tf))
+
     def test_deepspeech_model(self):
         batch_size = 2
         n_mels = 80

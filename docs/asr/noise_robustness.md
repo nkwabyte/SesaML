@@ -6,7 +6,9 @@ Real-world deployment environments (clinical health centers, market chatter, str
 
 ## 1. Training Pipeline: On-the-Fly Noise Augmentation
 
-Training the model exclusively on clean studio audio causes severe performance degradation when deployed in noisy environments. We inject real-world noise on-the-fly during training to teach the acoustic model noise-invariant speech representations.
+This section is a design. The SNR mixer is not in `src/asr/data/audio_transforms.py`. The train front-end that actually runs is log-mel, per-utterance CMVN, then SpecAugment, and, since 2026-10-31, a speed perturbation at 0.9 / 1.0 / 1.1 that was measured and did not beat the served model ([`results.md` §10](results.md#10-the-path-under-030)).
+
+Training the model exclusively on clean studio audio causes severe performance degradation when deployed in noisy environments. The sketch below is how real-world noise would be injected on the fly.
 
 ```
                            Clean Audio Waveform
@@ -93,6 +95,7 @@ Raw Field Audio ──► [ 1. Silero VAD (Trim Silence/Hum) ] ──► [ 2. De
 | Pipeline Stage | Technique | Objective | Status |
 | :--- | :--- | :--- | :--- |
 | **Training** | `SpecAugment` (Time/Freq Masking) | Prevents overfitting to specific spectral features | Supported (`audio_transforms.py`) |
-| **Training** | On-the-Fly Noise Injection (MUSAN) | Forces model to learn noise-invariant acoustics | Planned |
+| **Training** | Speed perturbation 0.9 / 1.0 / 1.1, waveform only, train front-end only | Measured on `p7-speed` (`conformer-medium/v006`). Lagyamfi test beam+LM 0.2920 against the served model's 0.2887. Not part of the served weights | In the train transform by default. See [`results.md`](results.md#10-the-path-under-030) |
+| **Training** | On-the-Fly Noise Injection (MUSAN) | The design in §1. It is not implemented in `audio_transforms.py` | Planned |
 | **Inference** | Spectral Gating Noise Reduction | Removes stationary background hum/hiss | Supported (`--noise-reduction`) |
 | **Inference** | Silero Voice Activity Detection (VAD) | Trims silence & prevents false text insertions | Planned |

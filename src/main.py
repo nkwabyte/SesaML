@@ -288,6 +288,7 @@ def train_transforms_for(config: PipelineConfig):
         n_fft=config.audio.n_fft,
         hop_length=config.audio.hop_length,
         time_mask_ratio=config.audio.time_mask_ratio,
+        speed_factors=config.audio.speed_factors,
     )
 
 

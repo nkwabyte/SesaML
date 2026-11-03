@@ -112,8 +112,16 @@ def dataset_lengths(dataset, sample_rate: int = 16000) -> List[float]:
     ConcatDataset is unwrapped so several corpora bucket as one pool - which is
     the case that matters most, since the corpora differ from each other far
     more than they vary internally.
+
+    Subset is unwrapped too: the CTC feasibility filter returns one, and without
+    this `--min-headroom` silently turned bucketing off (batches fell back to
+    shuffled order, padding every short clip to the longest in its batch).
     """
-    from torch.utils.data import ConcatDataset
+    from torch.utils.data import ConcatDataset, Subset
+
+    if isinstance(dataset, Subset):
+        base = dataset_lengths(dataset.dataset, sample_rate=sample_rate)
+        return [base[i] for i in dataset.indices]
 
     if isinstance(dataset, ConcatDataset):
         values: List[float] = []

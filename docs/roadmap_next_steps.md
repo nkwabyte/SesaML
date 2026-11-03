@@ -4,6 +4,23 @@ Planned technical improvements and architectural milestones for SesaML on Akan (
 
 Items marked **Completed** were implemented and measured; see [`docs/asr/results.md`](asr/results.md) for the numbers.
 
+## Where the measurements stand (2026-10-31)
+
+The served model is **`conformer-medium/v003`**: Lagyamfi test beam+LM **0.2887 / 0.0828**, greedy 0.3350 / 0.0924, 259 clips. The small model currently served is `conformer/v006` at beam+LM 0.3622 / 0.1100. The full table, including the runs that were rolled back, is [`results.md` §10](asr/results.md#10-the-path-under-030).
+
+Measured and not adopted, because none of them beat v003 on the Lagyamfi test beam number by more than the ±1.1-point noise:
+
+- Pseudo-labels on 41 h of WAXAL (`conformer-medium/v004`, beam 0.2975).
+- Code-switch fine-tune (`conformer-medium/v005`, beam 0.2933). It does help a prompt-disjoint code-switch holdout (greedy 0.6597 against v003's 0.8691) and stays available for that.
+- Train-only speed perturbation at 0.9 / 1.0 / 1.1 (`conformer-medium/v006`, beam 0.2920). The layer is now the default in the train front-end. v003 was trained without it.
+- Language-model text and α/β. The shipped character 6-gram at α 0.5, β 0.5 is the one the headline uses.
+
+The next work is the court-first flow in [`asr/court_flow.md`](asr/court_flow.md). Lagyamfi test stays a regression check. It is no longer the set that selects or promotes a model. The blocking step is a native speaker filling the court sheet, after the pack is re-drafted with v003. Dropping Fante-marked WAXAL clips is the first acoustic experiment, and only after that sheet can score it. Checkpoint averaging is not in the flow. A longer fine-tune is not the default next step: on `p7-speed`, training loss fell through epoch 12 while dev WER never beat epoch 2.
+
+The 500-hour health corpus is unchanged from Phase 1.1 below. It has not been made trainable.
+
+`ghanaopenai/twi-multispeaker-tts` is a separate 91-hour broadcast set with transcripts, checked on the Hub on 2026-11-02 and not downloaded. It is a candidate addition, not a replacement. The work is in [`asr/ghanaopenai_twi_multispeaker_tts.md`](asr/ghanaopenai_twi_multispeaker_tts.md). The raw 30-second clips are the same shape that failed on the health corpus, so they have to be cut to utterances before any training run.
+
 ---
 
 ## Phase 0: Completed
@@ -78,7 +95,7 @@ Aligned 8/8 clips, producing 25 utterances from 8 thirty-second windows (median 
 1. **Align with a domain-appropriate model.** The segmentation machinery works; its weak link is using `v004` as the aligner. A multilingual model (MMS, wav2vec2) would align this audio far better.
 2. **Filter segments by alignment confidence** before training on them, and measure what fraction survives.
 3. **Fine-tune, never train from scratch** on this corpus.
-4. **Decide what is being optimised.** The test set is Lagyamfi — Bible readings. Health is broadcast media. Training on it optimises a different distribution than the one measured, and could make the reported WER worse while making the model more useful. If broadcast/health is the product target, a held-out split from *that* corpus is needed before any of this can be called success.
+4. **The product target is court speech, not this corpus.** Decided in [`court_flow.md`](asr/court_flow.md). Health is Adom TV broadcast media. Training on it optimises a different distribution from both Lagyamfi and the court recordings. It stays blocked until a speaker has checked the labels, and it is not the next training run.
 
 ### 1b. CTC Feasibility Filtering — *completed*
 
@@ -92,7 +109,7 @@ Convert numeric digits (`2 capsules` → `capsules mmienu`) to spelled-out Twi. 
 Partially addressed: typographic variants are now folded (`’` → `'`), which had been silently gluing elisions like `m’abankɛseɛ` into one word. Corpus probes report that ~4% of characters are dropped, and confirm they are **all punctuation** — legitimately not spoken.
 
 ### 3. N-Gram Language Model & Beam Search Decoding — *completed*
-Done, and it was the highest-value item as predicted: **WER 0.4705 → 0.3898, a 17.2% relative reduction, with no retraining.** A character 6-gram over 2.0M characters of Twi, fused into a CTC prefix beam search ([`src/asr/decoding/`](../src/asr/decoding/)). Full numbers, the α/β sweep and the leakage check are in [`results.md`](asr/results.md#6-language-model-decoding).
+Done, and it was the highest-value item on the early small model: **WER 0.4705 → 0.3898, a 17.2% relative reduction, with no retraining.** A character 6-gram over 2.0M characters of Twi, fused into a CTC prefix beam search ([`src/asr/decoding/`](../src/asr/decoding/)). Full numbers, the α/β sweep and the leakage check are in [`results.md`](asr/results.md#6-language-model-decoding). The same decoder on the served medium model is the 0.2887 headline. A later text and α/β ablation did not beat the shipped LM; that result is in [`results.md` §10](asr/results.md#10-the-path-under-030).
 
 Not KenLM: it and `pyctcdecode` pin `numpy<2` against this project's numpy 2.3.3 under torch 2.9, so the n-gram model and beam search are implemented in-repo instead.
 
@@ -135,7 +152,10 @@ Every diarization claim is currently qualitative — none of the three corpora c
 | **Versioned Model Registry** | Promote-on-improvement + rollback | High | Completed |
 | **First Trained Model** | WER 0.51 / CER 0.166 on 12.3h (`conformer/v001`) | High | Completed |
 | **500h Health Corpus Training** | Fine-tune or segment 30s clips | High | Blocked — see Phase 1.1 |
-| **N-Gram LM + Beam Search Decoder** | 0.4705 → 0.3898 WER, no retraining | High | Completed |
+| **N-Gram LM + Beam Search Decoder** | 0.4705 → 0.3898 WER on the early small model; 0.2887 on the served medium model | High | Completed |
+| **WAXAL fine-tune + medium Conformer** | Served `conformer-medium/v003`, Lagyamfi test beam+LM 0.2887 / 0.0828 | High | Completed |
+| **Pseudo-labels, code-switch, speed perturbation** | None beat v003 on Lagyamfi test beam by more than the noise. Rolled back | High | Measured, not adopted |
+| **Court-first flow** | Stop promoting on Lagyamfi. Score customary-court audio, then one change at a time | High | Planned — [`court_flow.md`](asr/court_flow.md) |
 | **Noise Augmentation Training** | On-the-fly MUSAN SNR mixing | Medium | Documented |
 | **Twi Number Normalization** | Digits → spelled-out Twi | Medium | Partial |
 | **DER Evaluation Set** | Labelled multi-speaker Akan audio | Medium | Planned |

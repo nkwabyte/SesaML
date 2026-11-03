@@ -52,6 +52,34 @@ def _mel_spectrogram(sample_rate: int, n_mels: int, n_fft: int, hop_length: int)
     )
 
 
+class SpeedPerturbation(nn.Module):
+    """
+    Randomly speed the waveform up or down before the mel filterbank.
+
+    The sample rate stays put, so the mel bins mean the same thing at 0.9x and
+    at 1.1x. Only the duration changes. A factor of 1.0 is included so a third
+    of the clips are the original recording.
+    """
+
+    def __init__(self, factors=(0.9, 1.0, 1.1), sample_rate: int = 16000):
+        super().__init__()
+        if not factors:
+            raise ValueError("SpeedPerturbation needs at least one factor")
+        self.factors = tuple(float(factor) for factor in factors)
+        self.sample_rate = int(sample_rate)
+
+    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+        index = int(torch.randint(len(self.factors), ()))
+        factor = self.factors[index]
+        if factor == 1.0:
+            return waveform
+        # Resample(orig=sr*factor, new=sr) shortens the clip when factor > 1
+        # and lengthens it when factor < 1, which is a speed change at a
+        # fixed sample rate.
+        origin = max(1, int(round(self.sample_rate * factor)))
+        return torchaudio.functional.resample(waveform, origin, self.sample_rate)
+
+
 def get_train_audio_transforms(
     sample_rate: int = 16000,
     n_mels: int = 80,
@@ -59,21 +87,28 @@ def get_train_audio_transforms(
     time_mask_param: int = 100,
     n_fft: int = 400,
     hop_length: int = 160,
-    time_mask_ratio: float = 0.2
+    time_mask_ratio: float = 0.2,
+    speed_factors=(0.9, 1.0, 1.1),
 ) -> nn.Sequential:
     """
-    Training front-end: log-mel, per-utterance normalization, then SpecAugment.
+    Training front-end: speed perturbation, log-mel, per-utterance
+    normalization, then SpecAugment.
 
     `time_mask_ratio` caps a time mask at a fraction of the utterance. Without
     it a 100-frame mask erases a full second, which on a short clip removes more
     speech than remains and yields a target the audio no longer supports.
+    Pass an empty `speed_factors` to train without speed perturbation.
     """
-    return nn.Sequential(
+    stages = []
+    if speed_factors:
+        stages.append(SpeedPerturbation(speed_factors, sample_rate=sample_rate))
+    stages.extend((
         _mel_spectrogram(sample_rate, n_mels, n_fft, hop_length),
         LogMelNormalize(),
         torchaudio.transforms.FrequencyMasking(freq_mask_param=freq_mask_param),
         torchaudio.transforms.TimeMasking(time_mask_param=time_mask_param, p=time_mask_ratio),
-    )
+    ))
+    return nn.Sequential(*stages)
 
 
 def get_valid_audio_transforms(

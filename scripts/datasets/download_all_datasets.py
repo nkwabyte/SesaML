@@ -30,7 +30,7 @@ def main():
     args, unknown = parser.parse_known_args()
 
     repo_root = Path(__file__).resolve().parents[2]
-    download_script = repo_root / "scripts" / "download_dataset.py"
+    download_script = repo_root / "scripts" / "datasets" / "download_dataset.py"
 
     print(f"[sesaml] Starting bulk download of {len(CORPORA)} Akan datasets into data/...")
 
