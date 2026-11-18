@@ -2,6 +2,14 @@
 
 Gradio web front-end for the SesaML Akan speech-to-text models.
 
+**SESA** (`app/sesa.py`) is the local test page. It serves `conformer-medium/v003`
+with beam search and the character language model, and it can record, upload,
+or play the sample clips in `demo_audio/`.
+
+```bash
+scripts/asr/serve_sesa.sh
+```
+
 ```
 app/
 ├── app.py     the Gradio interface

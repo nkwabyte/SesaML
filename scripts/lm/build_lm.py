@@ -45,10 +45,22 @@ from src.asr.decoding.language_model import DEFAULT_ORDER, CharNGramLM  # noqa: 
 DEFAULT_OUTPUT = os.path.join("outputs", "asr", "lm", "twi_char.json")
 
 TWI_CSV_COLUMNS = ("Akuapem Twi", "1. Twi Translation", "twi", "Twi")
-AUDIO_CORPORA = (
-    ("data/datasets/Lagyamfi__akan_audio_processed/train", "sentence"),
-    ("data/datasets/ghanaopendata__twi-speech-text-multispeaker-16k/train", "text"),
-)
+LAGYAMFI = "data/datasets/Lagyamfi__akan_audio_processed"
+WAXAL_TRAIN = "data/datasets/ug-waxal__akan-transcribed/train"
+
+
+def audio_corpora(lagyamfi_split: str = "train"):
+    """
+    The audio corpora whose transcripts feed the model.
+
+    `train` is the historical default. `train_core` is `train` minus the 300 clips
+    held out as `dev`: an LM that has read the dev transcripts cannot be used to
+    tune the decoding weights on dev.
+    """
+    return (
+        (f"{LAGYAMFI}/{lagyamfi_split}", "sentence"),
+        ("data/datasets/ghanaopendata__twi-speech-text-multispeaker-16k/train", "text"),
+    )
 
 
 def from_csv(path: str) -> Iterator[str]:
@@ -110,6 +122,27 @@ def from_audio_corpus(path: str, column: str) -> Iterator[str]:
         print(f"  skipped {path}: {type(exc).__name__}")
 
 
+def from_waxal(path: str, asante_only: bool) -> Iterator[str]:
+    """
+    Transcripts of the WAXAL image-description corpus (train split only).
+
+    Roughly one clip in eight carries Fante spellings (`dz`, `ebien`, ...), flagged
+    in the `fante_marker` column by build_waxal_dataset.py; `asante_only` drops them.
+    """
+    if not os.path.isdir(path):
+        return
+    from datasets import load_from_disk
+
+    dataset = load_from_disk(path)
+    drop = [c for c in dataset.column_names if c not in ("sentence", "fante_marker")]
+    for row in dataset.remove_columns(drop):
+        if asante_only and row.get("fante_marker"):
+            continue
+        value = str(row.get("sentence") or "").strip()
+        if value:
+            yield value
+
+
 def from_translations(path: str) -> Iterator[str]:
     """The Asante Twi column of the translation worklist, once it is filled in."""
     if not os.path.isfile(path):
@@ -121,7 +154,8 @@ def from_translations(path: str) -> Iterator[str]:
                 yield value
 
 
-def collect(include_audio: bool, include_verified: bool = False) -> Iterator[str]:
+def collect(include_audio: bool, include_verified: bool = False,
+            lagyamfi_split: str = "train", waxal: str = "none") -> Iterator[str]:
     sources = [
         ("english/to_translate.csv", from_translations,
          os.path.join("data", "corpus", "english", "to_translate.csv")),
@@ -141,8 +175,17 @@ def collect(include_audio: bool, include_verified: bool = False) -> Iterator[str
             yield line
         print(f"  {label:<26} {count:>7,} lines")
 
+    # Before the audio corpora, so the held-out perplexity lines (taken from the
+    # end of the stream) stay what they have always been.
+    if waxal != "none":
+        count = 0
+        for line in from_waxal(WAXAL_TRAIN, asante_only=(waxal == "asante")):
+            count += 1
+            yield line
+        print(f"  {'ug-waxal train (' + waxal + ')':<26} {count:>7,} transcripts")
+
     if include_audio:
-        for path, column in AUDIO_CORPORA:
+        for path, column in audio_corpora(lagyamfi_split):
             count = 0
             for line in from_audio_corpus(path, column):
                 count += 1
@@ -164,6 +207,12 @@ def main() -> int:
                         help="Include data/corpus/verified_data.csv. Off by default: it leans "
                              "Akuapem while the audio is Asante, and an ablation showed it does "
                              "not improve WER and slightly worsens CER")
+    parser.add_argument("--lagyamfi-split", default="train",
+                        help="Lagyamfi split to read transcripts from. Use train_core to keep the "
+                             "dev clips' text out of the model so dev can tune the decoding weights")
+    parser.add_argument("--waxal", choices=("none", "all", "asante"), default="none",
+                        help="Add WAXAL train transcripts (needs data/datasets/ug-waxal__akan-transcribed); "
+                             "'asante' drops clips flagged with Fante spellings. Off by default")
     parser.add_argument("--holdout", type=int, default=2000,
                         help="Lines held out to report perplexity on")
     args = parser.parse_args()
@@ -173,7 +222,7 @@ def main() -> int:
 
     print("Collecting Twi text:")
     normalised: List[str] = []
-    for line in collect(args.include_audio, args.include_verified):
+    for line in collect(args.include_audio, args.include_verified, args.lagyamfi_split, args.waxal):
         # Through the vocabulary, so the model covers exactly what can be emitted.
         text = transform.int_to_text(transform.text_to_int(line)).strip()
         if text:

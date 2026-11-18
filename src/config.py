@@ -19,6 +19,9 @@ class AudioConfig:
     freq_mask_param: int = 27
     time_mask_param: int = 100
     time_mask_ratio: float = 0.2
+    # Speed perturbation, training only. 0.9 and 1.1 are the usual two factors
+    # around an unchanged clip. Evaluation and inference never see this.
+    speed_factors: tuple = (0.9, 1.0, 1.1)
     apply_noise_reduction: bool = False
 
     @property

@@ -2,15 +2,34 @@
 
 Every figure here was produced by this repository. Where something is unverified or a negative result, it says so.
 
-Hardware: **NVIDIA RTX 4000 SFF Ada**, 20GB, 70W cap. Windows, Python 3.11, torch 2.9.0+cu130.
+Hardware for §§2–9: **NVIDIA RTX 4000 SFF Ada**, 20GB, 70W cap. Windows, Python 3.11, torch 2.9.0+cu130. The runs in §10 were measured on an **NVIDIA RTX A6000** (48GB) on `knust-gpu`.
 
 ---
 
 ## 1. Headline
 
+The model the project serves is **conformer-medium/v003** (`p5-ctrl`), 26,281,257 parameters. The headline number is a separate `evaluate` run, not the training log.
+
 | | |
 |---|---|
-| **Best model** | Conformer-CTC, 8.4M parameters (`conformer/v004`) |
+| **Served model** | Conformer-CTC medium, 26,281,257 parameters (`conformer-medium/v003`) |
+| **WER** | **0.2887** beam+LM (greedy: 0.3350) |
+| **CER** | **0.0828** beam+LM (greedy: 0.0924) |
+| Decoder | beam search, width 25, + character 6-gram LM (α 0.5, β 0.5) |
+| Test set | Lagyamfi test, 259 clips, held out (`evaluate-20261016-003148`, `evaluate-20261016-003142`) |
+| Training data | ghanaopendata train + Lagyamfi `train_core` + WAXAL v2 train, 31,268 samples kept at headroom ≥ 1.0 |
+| Selection | best dev greedy WER, epoch 10 of 12. Dev greedy was 0.2899; that is not the headline |
+| Registry label | test greedy 0.335 / 0.0924. The beam figure lives in the version notes |
+
+The registry stores the greedy test WER. Training publishes the best **dev** greedy WER and will auto-promote when that number is lower than the stored label, which is how a worse model can replace v003. §10 records the three runs that did that and were rolled back. The day-to-day log of every run is [`data/PLAN_WER_0.30.md`](../../data/PLAN_WER_0.30.md).
+
+### Earlier baseline
+
+The first write-up of this file, measured on the Ada card, is still the history of the small model:
+
+| | |
+|---|---|
+| **Model** | Conformer-CTC, 8,380,409 parameters (`conformer/v004` at the time) |
 | **WER** | **0.3917** (greedy: 0.4705) |
 | **CER** | **0.1264** (greedy: 0.1430) |
 | Decoder | beam search, width 25, + character 6-gram LM (α 0.5, β 0.5) |
@@ -18,7 +37,7 @@ Hardware: **NVIDIA RTX 4000 SFF Ada**, 20GB, 70W cap. Windows, Python 3.11, torc
 | Validation | Lagyamfi test split, 259 clips, held out |
 | Training time | 80 epochs from scratch (~2h), then 40 fine-tuning epochs (~37m) |
 
-From a random initialisation, on twelve hours of audio, in two hours of training. CER 0.143 means roughly **six characters in seven are correct**.
+A re-evaluation on 2026-10-14 (`evaluate-20261014-110832`, `evaluate-20261014-110827`) measured the same beam WER, 0.3917 / 0.1264, and greedy 0.4713 / 0.1431. From a random initialisation, on twelve hours of audio, in two hours of training. CER 0.143 means roughly **six characters in seven are correct**.
 
 ### What it actually produces
 
@@ -138,7 +157,7 @@ Every finished training run is archived in the **model registry** under `outputs
 | | conformer | v002 | 0.5102 | 0.1659 | `smoke-init-test3` | 1-epoch smoke test of `--init-weights` |
 | | conformer | v001 | 0.5100 | 0.1660 | `run-clean` | 12.3h from scratch, 80 epochs, bs 32, lr 8e-4 |
 
-`→` marks the version being served. `run-big` (113h, WER 1.0) is deliberately **not** published as a serving version — see §3.
+`→` marks what this table's write-up was serving. That is no longer current. `run-big` (113h, WER 1.0) is deliberately **not** published as a serving version — see §3. The registry served today is `conformer/v006` for the small model and **`conformer-medium/v003`** for the model the app should serve. Both are in §10, with test-set numbers from `evaluate` rather than from the training log.
 
 **v004 is an 8% relative WER improvement over v001** (0.510 → 0.4701), from a warm restart: v001's weights reloaded with a fresh one-cycle schedule at lr 2.5e-4 over the same 12.3 hours of audio. No new data was involved.
 
@@ -344,7 +363,14 @@ Full end-to-end output is in [`speaker_diarization.md`](speaker_diarization.md#7
 ## 9. Reproducing
 
 ```bash
-# The working model
+# Headline number for the served model. Training validation stays greedy;
+# this beam run is the number to quote.
+python -m src.main evaluate --architecture conformer-medium \
+  --model-path outputs/asr/registry/conformer-medium/v003/model.pt \
+  --hf-dataset Lagyamfi/akan_audio_processed:test \
+  --decoder beam
+
+# The early small-model baseline
 scripts/asr/train.sh --architecture conformer \
   --hf-dataset Lagyamfi/akan_audio_processed:train \
   --hf-dataset ghanaopendata/twi-speech-text-multispeaker-16k:train \
@@ -375,3 +401,67 @@ scripts/asr/serve_app.sh
 ```
 
 Continue a run with `--resume outputs/asr/checkpoints/<run_id>/last_model.pt`.
+
+---
+
+## 10. The path under 0.30
+
+Every row is an `evaluate` run on **Lagyamfi test, 259 clips**, unless the row names another set. Beam is CTC prefix beam search, width 25, with the character 6-gram at α 0.5, β 0.5 (`outputs/asr/lm/twi_char.json`). Greedy is what training-time validation reports. On this test set the project treats about **±1.1 points** as one standard error, and does not promote a model for a smaller move.
+
+The small model below is 8,380,409 parameters. The medium model is 26,281,257. Both counts are the figure the training log prints at startup.
+
+| Run | Registry | What changed | Greedy WER / CER | Beam+LM WER / CER | After the test |
+|---|---|---|---|---|---|
+| `p1-clean-baseline` | `conformer/v005` | From scratch, ghanaopendata + Lagyamfi `train_core`, 80 epochs. The registry file still stores the **dev** greedy 0.4717; the test numbers are the evaluate run | 0.4871 / 0.1500 | 0.3977 / 0.1289 | Kept as the clean init. Not served |
+| `p2-waxal-ft` | `conformer/v006` | Warm start of v005, plus WAXAL v1 train, 30 epochs, best epoch 25 | 0.4125 / 0.1212 | 0.3622 / 0.1100 | **Served small model** |
+| `p3-medium` | `conformer-medium/v001` | Same three corpora, medium model from scratch, 40 epochs, best epoch 39 | 0.3540 / 0.0962 | 0.3131 / 0.0897 | Replaced by v002 |
+| `p4-medium-ft` | `conformer-medium/v002` | Warm start of v001, WAXAL v1, 30 epochs, lr 1.5e-4, best epoch 26 | 0.3430 / 0.0935 | 0.3030 / 0.0862 | 0.3 pt above 0.30, inside the noise. Replaced by v003 |
+| **`p5-ctrl`** | **`conformer-medium/v003`** | Warm start of v002, real data only, WAXAL **v2** train (17,317 clips), 12 epochs, lr 1e-4, best epoch 10 | **0.3350 / 0.0924** | **0.2887 / 0.0828** | **Served.** 1.4 pt under v002, just outside the noise |
+| `p5-pseudo` | `conformer-medium/v004` | v003 recipe plus 7,772 pseudo-labelled WAXAL clips (41 h, top 40% by `seq_lp`) | 0.3492 / 0.0945 | 0.2975 / 0.0857 | Negative. Rolled back |
+| `p6-cs` | `conformer-medium/v005` | v003 recipe plus 8,003 code-switch clips (`train_cap7`, 13.4 h) | 0.3352 / 0.0921 | 0.2933 / 0.0841 | No change on Twi test. Rolled back |
+| `p7-speed` | `conformer-medium/v006` | v003 recipe plus train-only speed perturbation 0.9 / 1.0 / 1.1, warm start from **v003**, 12 epochs, best dev epoch 2 | 0.3324 / 0.0895 | 0.2920 / 0.0835 | Negative. Rolled back |
+
+Evaluate run ids for the served model and for `p7-speed`: `evaluate-20261016-003142` (v003 greedy), `evaluate-20261016-003148` (v003 beam), `p7-speed-test-greedy`, `p7-speed-test-beam`. The earlier rows are the `evaluate-20261014-*` and `evaluate-20261015-*` / `evaluate-20261016-*` directories under `outputs/asr/runs/`.
+
+### What each negative result actually did
+
+**Pseudo-labels (`v004`).** WAXAL v2 test greedy was 0.3790 / 0.1288 against v003's 0.3801 / 0.1298. Beam on Lagyamfi test was 0.9 pt worse. The gain that took v002 from 0.3030 to v003's 0.2887 came from the extra real WAXAL v2 audio and the extra fine-tune, not from the pseudo-labels.
+
+**Code-switching (`v005`).** Lagyamfi test did not move. A prompt-disjoint holdout of 434 clips did: greedy 0.6597 / 0.2770 against v003's 0.8691 / 0.5049 (`evaluate-20261016-115910`, `evaluate-20261016-105826`). Beam on that holdout is 0.6925 / 0.3191 for v005 and 0.8496 / 0.5128 for v003, so the Twi-only language model hurts the code-switched model. WAXAL v2 test greedy improved to 0.3676 / 0.1251. v005 is the code-switch option. It is not the served Twi model. 0.66 on the holdout is still poor: the corpus has 1,165 sentences.
+
+**Speed perturbation (`v006`, 2026-10-31).** One change from the v003 recipe: each training waveform is resampled at 0.9×, 1.0×, or 1.1× before the mel spectrogram. `SpeedPerturbation` is the first stage of `get_train_audio_transforms` only. Evaluation and inference use `get_valid_audio_transforms`, which does not include it. The run started from v003's weights, on GPU 0, and finished in 2951 seconds. Beam is 0.3 pt worse than v003 and greedy is 0.3 pt better. Both are inside the noise. This run was not scored on WAXAL test.
+
+Dev greedy on the 300-clip Lagyamfi dev set, which is what selected the checkpoint:
+
+| Epoch | Train loss | Dev WER | Dev CER |
+|---|---|---|---|
+| 1 | 0.512 | 0.2976 | 0.0760 |
+| **2** | **0.502** | **0.2935** | **0.0748** |
+| 3 | 0.508 | 0.3071 | 0.0767 |
+| 4 | 0.519 | 0.3028 | 0.0752 |
+| 5 | 0.511 | 0.3112 | 0.0801 |
+| 6 | 0.497 | 0.3066 | 0.0790 |
+| 7 | 0.484 | 0.3043 | 0.0789 |
+| 8 | 0.466 | 0.2953 | 0.0747 |
+| 9 | 0.452 | 0.2977 | 0.0755 |
+| 10 | 0.439 | 0.2959 | 0.0754 |
+| 11 | 0.433 | 0.2962 | 0.0748 |
+| 12 | 0.424 | 0.2945 | 0.0751 |
+
+Train loss fell through epoch 12. Dev WER never beat epoch 2. A longer run of this fine-tune is not supported by that curve. v003's own dev greedy best was 0.2899, so the speed-perturbed model was behind on the selection set as well as on the test beam number.
+
+`AudioConfig.speed_factors` defaults to `(0.9, 1.0, 1.1)`, so a later training run includes the layer unless that tuple is emptied. v003 itself was trained before the layer existed.
+
+### Promotion compares the wrong pair of numbers
+
+`ModelRegistry` promotes when the new run's WER is lower than the served version's stored WER. v003's stored WER is the test greedy **0.335**. A training run publishes its best **dev** greedy WER, which sits near 0.29. `p7-speed` therefore logged `Published conformer-medium/v006 (WER 0.2935) and promoted it to current` even though the test beam number was worse. The same thing happened to `v004` and `v005`. Each time, `models rollback --architecture conformer-medium` returned the served pointer to v003, and the version's `metadata.json` was then relabelled so `wer` / `cer` are the test greedy figures and the dev figures sit in `training_log_dev_greedy_wer` / `training_log_dev_greedy_cer`.
+
+`conformer/v005` has not been relabelled. Its registry WER, 0.4717, is the dev number. The test numbers in the table above are the evaluate run.
+
+### Language model, after the acoustic model moved
+
+§6 is the measurement on the early small model. A later ablation on `conformer/v006` (2026-10-15, same beam settings) did not find a better language model: dropping Akuapem-leaning `verified_data.csv` was free, adding WAXAL transcripts or `michsethowusu/twi-english-parallel-synthetic-50m` made things worse, and an α/β re-sweep stayed inside the noise of α 0.5, β 0.5. The shipped LM is the one the headline uses. It has read the Lagyamfi **dev** transcripts, so dev beam numbers are leaky. Test has not: 1 of 259 references overlaps, and that one is the two-word phrase "na afei".
+
+### Where the measured record stops
+
+The order of work after this table is [`court_flow.md`](court_flow.md) (2026-10-31). Lagyamfi test stays the regression number. The next measurement is the court gold sheet, drafted with v003, then scored. Dropping Fante-marked WAXAL clips is the first training change in that plan, and it waits on the sheet. Checkpoint averaging is not scheduled. The run log that produced the table remains [`data/PLAN_WER_0.30.md`](../../data/PLAN_WER_0.30.md). The 500-hour health corpus is still the negative result in §3. It has not been retrained.

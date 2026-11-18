@@ -49,3 +49,5 @@ models/
 *.safetensors
 *.onnx
 *.tflite
+*.zip
+asr/

@@ -1281,6 +1281,7 @@ fabric.properties
 # Local AI assistant / prompt context files (ignored from git)
 GEMINI.md
 CLAUDE.md
+AGENTS.md
 .gemini/
 .claude/
 .agents/

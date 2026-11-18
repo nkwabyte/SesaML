@@ -130,6 +130,38 @@ def test_dataset_lengths_unwraps_concatenated_corpora():
     assert dataset_lengths(combined) == [1.0, 2.0, 30.0]
 
 
+class _Fake:
+    def __init__(self, values):
+        self.values = values
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, idx):
+        return self.values[idx]
+
+    def durations(self):
+        return self.values
+
+
+def test_dataset_lengths_unwraps_a_subset_in_subset_order():
+    from torch.utils.data import Subset
+
+    subset = Subset(_Fake([1.0, 2.0, 30.0, 4.0]), [3, 0, 2])
+    assert dataset_lengths(subset) == [4.0, 1.0, 30.0]
+
+
+def test_dataset_lengths_unwraps_a_feasibility_filtered_concatenation():
+    """The shape --min-headroom hands the trainer: a Subset over a ConcatDataset."""
+    from torch.utils.data import ConcatDataset, Subset
+
+    combined = ConcatDataset([_Fake([1.0, 2.0]), _Fake([30.0, 0.5])])
+    filtered = Subset(combined, [0, 2, 3])
+    lengths = dataset_lengths(filtered)
+    assert lengths == [1.0, 30.0, 0.5]
+    assert len(lengths) == len(filtered)
+
+
 def test_dataset_without_durations_is_reported_clearly():
     class NoDurations:
         def __len__(self):
